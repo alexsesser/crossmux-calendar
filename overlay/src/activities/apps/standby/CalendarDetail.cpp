@@ -55,37 +55,23 @@ struct Txt {
   const char* noFcHint;
   const char* hourly;    // «сегодня»-страница: заголовок по часам
   const char* cap;       // подпись под графиком
-  // Легенда «7 дней»: что за числа по краям полосы и что значат её чёрная и пустая части.
-  const char* legTemp;    // портрет, жирная строка
-  const char* legFill;    // портрет: чёрная часть
-  const char* legEmpty;   // портрет: пустая часть
-  const char* legTempL;   // ландшафт, одна строка: числа
-  const char* legFillL;   // …чёрная часть
-  const char* legEmptyL;  // …пустая часть
 };
 
 const Txt kRu = {"Назад", "Сегодня", "сегодня", "завтра", "вчера", "через %d дн.", "%d дн. назад", "День",
                  "Солнце", "Луна", "Погода", "освещена %d %%", "лунный день %d", "Полнолуние", "новолуние",
                  "%c%d мин к вчера", "Прогноз доступен на 7 дней вперёд", "7 дней",
                  "Загрузится при подключении к Wi-Fi", "сегодня",
-                 "Температура · осадки % · ночь",
-                 "t\xC2\xB0: слева мин, справа макс за день", "чёрное — диапазон этого дня",
-                 "пустое — остальная неделя", "t\xC2\xB0: мин слева, макс справа", "этот день",
-                 "остальная неделя"};
+                 "Температура · осадки % · ночь"};
 const Txt kEn = {"Back", "Today", "today", "tomorrow", "yesterday", "in %d days", "%d days ago", "Day",
                  "Sun", "Moon", "Weather", "%d %% lit", "lunar day %d", "Full moon", "new moon",
                  "%c%d min vs yesterday", "Forecast covers the next 7 days", "7 days",
                  "Loads when Wi-Fi is available", "today",
-                 "Temp. · rain % · night",
-                 "t\xC2\xB0: min on the left, max on the right", "black = this day's range",
-                 "empty = rest of the week", "t\xC2\xB0: min left, max right", "this day", "rest of week"};
+                 "Temp. · rain % · night"};
 const Txt kDe = {"Zurück", "Heute", "heute", "morgen", "gestern", "in %d Tagen", "vor %d Tagen", "Tag",
                  "Sonne", "Mond", "Wetter", "%d %% hell", "Mondtag %d", "Vollmond", "Neumond",
                  "%c%d Min zu gestern", "Vorhersage für die nächsten 7 Tage", "7 Tage",
                  "Wird bei WLAN geladen", "heute",
-                 "Temp. · Regen % · Nacht",
-                 "t\xC2\xB0: links min, rechts max des Tages", "schwarz = Bereich dieses Tages",
-                 "leer = Rest der Woche", "t\xC2\xB0: links min, rechts max", "dieser Tag", "übrige Woche"};
+                 "Temp. · Regen % · Nacht"};
 
 const Txt& txt(Lang l) { return l == Lang::Ru ? kRu : l == Lang::De ? kDe : kEn; }
 
@@ -437,47 +423,6 @@ void drawWeatherToday(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T
   drawHourTable(r, rx, ty, rw, rowH, hs, n, fc.utcOffsetSec, c);
 }
 
-// Легенда над списком дней: числа по краям полосы — минимум и максимум дня; сама полоса — шкала температур всей недели:
-// чёрная часть — где лежат температуры этого дня, пустая — остальной диапазон недели. Портрет — три строки, ландшафт — одна
-// (по высоте места нет). Возвращает высоту.
-int drawWeekLegend(GfxRenderer& r, int x, int y, int w, bool land, const Txt& T) {
-  const int lhS = lineH(r, kFontSmall);
-  constexpr int kSampleW = 40, kBarH = 10, kGap = 8;
-  auto sample = [&](int sx, int sy, bool filled) {  // образец полосы: сплошной или пустой
-    const int by = sy + (lhS - kBarH) / 2;
-    r.drawRoundedRect(sx, by, kSampleW, kBarH, 2, 5, true);
-    if (filled) r.fillRoundedRect(sx, by, kSampleW, kBarH, 5, Color::Black);
-  };
-  const int y0 = y;
-  if (!land) {
-    const Fit t(r, kFontSmall, T.legTemp, w - 12, kBold);
-    r.drawText(kFontSmall, x + 6, y, t.c_str(), true, kBold);
-    y += lhS + 2;
-    for (int k = 0; k < 2; ++k) {
-      sample(x + 6, y, k == 0);
-      const int tx = x + 6 + kSampleW + kGap;
-      const Fit t2(r, kFontSmall, k == 0 ? T.legFill : T.legEmpty, x + w - tx - 4);
-      r.drawText(kFontSmall, tx, y, t2.c_str(), true);
-      y += lhS + 2;
-    }
-  } else {
-    int cx = x + 6;
-    r.drawText(kFontSmall, cx, y, T.legTempL, true, kBold);
-    cx += textW(r, kFontSmall, T.legTempL, kBold) + 14;
-    for (int k = 0; k < 2; ++k) {
-      const char* lb = k == 0 ? T.legFillL : T.legEmptyL;
-      sample(cx, y, k == 0);
-      cx += kSampleW + kGap;
-      r.drawText(kFontSmall, cx, y, lb, true);
-      cx += textW(r, kFontSmall, lb) + 14;
-    }
-    y += lhS + 2;
-  }
-  y += 4;
-  r.drawLine(x, y - 3, x + w, y - 3, 1, true);
-  return y - y0;
-}
-
 void drawWeatherWeek(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T, const WxView& v, int y) {
   const int pad = calendar_config::kSidePad;
   const int x = f.x + pad, w = f.w - 2 * pad;
@@ -498,10 +443,24 @@ void drawWeatherWeek(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T,
   }
   if (gmax - gmin < 1.f) gmax = gmin + 1.f;
   const int lhT = lineH(r, kFontText), lhS = lineH(r, kFontSmall);
-  y += drawWeekLegend(r, x, y, w, f.land, T);
+  // Шапка колонок значками: t↓ (минимум дня), t↑ (максимум), капля (осадки), в ландшафте ещё ветер. Полоса между t↓ и t↑ —
+  // шкала недели; чем правее конец чёрной части, тем теплее день, поэтому отдельной подписи ей не нужно.
+  const int hdrH = glyphSize(r, kFontSmall) + 6;
   const int foot = lhS + 6;
-  const int rowH = std::clamp((f.bottom - foot - y) / fc.nDays, f.land ? 34 : 44, 82);
+  const int rowH = std::clamp((f.bottom - foot - (y + hdrH)) / fc.nDays, f.land ? 34 : 44, 82);
   const int col1 = f.land ? 150 : 110, col4 = f.land ? 190 : 96, colW = f.land ? 100 : 0;
+  {
+    const int iconH = std::min(44, rowH - 6);
+    const int hx0 = x + col1 + iconH + 10, hx1 = x + w - col4 - colW - 8;
+    const int px = x + w - colW - 4;
+    auto rightAt = [&](Glyph g, int right) { return right - (glyphTextW(r, kFontSmall, g, "") - 4); };
+    drawGlyphText(r, kFontSmall, Glyph::TempMin, hx0, y, "");
+    drawGlyphText(r, kFontSmall, Glyph::TempMax, rightAt(Glyph::TempMax, hx1), y, "");
+    drawGlyphText(r, kFontSmall, Glyph::Drop, rightAt(Glyph::Drop, px), y, "");
+    if (f.land) drawGlyphText(r, kFontSmall, Glyph::Wind, rightAt(Glyph::Wind, x + w - 4), y, "");
+    y += hdrH;
+    r.drawLine(x, y - 3, x + w, y - 3, 1, true);
+  }
   for (int i = 0; i < fc.nDays; ++i) {
     const auto& d = fc.d[i];
     const int ry = y + i * rowH;

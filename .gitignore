@@ -1,0 +1,7 @@
+work/
+.pio/
+tests/build/
+__pycache__/
+shots/
+backups/
+.claude/

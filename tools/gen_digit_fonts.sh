@@ -3,7 +3,8 @@
 # Во встроенных шрифтах CrossMux нет ничего крупнее 12 pt, поэтому делаем свой: только знаки 0-9 : - ° (крошечный).
 #
 # Размеры (pt) берутся из overlay/.../CalendarConfig.h (kTimeFontPortraitPt, kTimeFontLandscapePt, kTempFontPt).
-# Метрики (высота цифры, отступ) считаются здесь же и пишутся в конец CalendarFonts.h (namespace calendar_fonts),
+# Метрики (высота цифры, отступ) считаются здесь же и пишутся в CalendarFontMetrics.h (namespace calendar_fonts;
+# лёгкий файл, его можно включать откуда угодно; сами данные шрифта — CalendarFonts.h, включается ровно в одном месте),
 # поэтому после смены размера достаточно запустить скрипт и собрать — руками ничего править не нужно.
 # Забыли запустить — сборка остановится на static_assert в CalendarFace.cpp.
 #
@@ -17,6 +18,7 @@ TTF="../builtinFonts/source/Ubuntu/Ubuntu-Medium.ttf"
 DIR="$ROOT/overlay/src/activities/apps/standby"
 CFG="$DIR/CalendarConfig.h"
 OUT="$DIR/CalendarFonts.h"
+MET="$DIR/CalendarFontMetrics.h"
 CHARS='0123456789:-°'
 
 cfg() {  # cfg <имя константы> — целое из CalendarConfig.h
@@ -37,9 +39,9 @@ PT_XL="$(cfg kTimeFontPortraitPt)"; PT_L="$(cfg kTimeFontLandscapePt)"; PT_TEMP=
 } > "$OUT"
 
 # Метрики из самих данных шрифта: высота цифры «0» над базовой линией и отступ от верха строки до верха цифры.
-python3 - "$OUT" "$PT_XL" "$PT_L" "$PT_TEMP" <<'PY'
+python3 - "$OUT" "$MET" "$PT_XL" "$PT_L" "$PT_TEMP" <<'PY'
 import re, sys
-path, pt_xl, pt_l, pt_t = sys.argv[1], *map(int, sys.argv[2:5])
+path, met, pt_xl, pt_l, pt_t = sys.argv[1], sys.argv[2], *map(int, sys.argv[3:6])
 s = open(path, encoding="utf-8").read()
 
 def metrics(name):
@@ -50,8 +52,9 @@ def metrics(name):
     return top, ascender - top
 
 xl, l, t = metrics("calendar_time_xl"), metrics("calendar_time_l"), metrics("calendar_temp")
-s += f"""
-// Метрики и размеры, с которыми сгенерирован шрифт (CalendarFace.cpp сверяет размеры с CalendarConfig.h).
+m = f"""// Сгенерировано tools/gen_digit_fonts.sh вместе с CalendarFonts.h. Не править руками.
+#pragma once
+// Метрики и размеры, с которыми сгенерирован шрифт (CalendarDraw.cpp сверяет размеры с CalendarConfig.h).
 // DigitH — высота цифры «0» над базовой линией, TopOffset — от верха строки шрифта до верха цифры, px.
 namespace calendar_fonts {{
 constexpr int kTimePortraitPt = {pt_xl};
@@ -62,7 +65,7 @@ constexpr int kTimeLDigitH = {l[0]}, kTimeLTopOffset = {l[1]};
 constexpr int kTempDigitH = {t[0]}, kTempTopOffset = {t[1]};
 }}  // namespace calendar_fonts
 """
-open(path, "w", encoding="utf-8").write(s)
+open(met, "w", encoding="utf-8").write(m)
 PY
-echo "→ $OUT ($(wc -c < "$OUT") байт)"
-tail -9 "$OUT"
+echo "→ $OUT ($(wc -c < "$OUT") байт), $MET"
+cat "$MET"

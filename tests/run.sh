@@ -15,6 +15,11 @@ AJ=../work/.pio/libdeps/papermono/ArduinoJson/src
 if [ -d "$AJ" ]; then
   g++ -std=c++17 -O1 -Wall -Wextra -I"$SRC" -I"$AJ" test_weather.cpp "$SRC/CalendarCore.cpp" "$SRC/WeatherCore.cpp" -o build/test_weather
   ./build/test_weather data
+  g++ -std=c++17 -O1 -Wall -Wextra -I"$SRC" -I"$AJ" test_holidays.cpp "$SRC/CalendarCore.cpp" "$SRC/HolidayCore.cpp" -o build/test_holidays
+  ./build/test_holidays data
 else
   echo "ArduinoJson не найден ($AJ) — тесты погоды пропущены: сначала ./scripts/build.sh"
 fi
+
+g++ -std=c++17 -O1 -Wall -Wextra -I"$SRC" dump_moon.cpp "$SRC/CalendarCore.cpp" "$SRC/MoonPhase.cpp" -o build/dump_moon
+python3 verify_moon.py build/dump_moon

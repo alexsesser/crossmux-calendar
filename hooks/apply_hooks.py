@@ -16,6 +16,7 @@ import sys
 
 MARK = "[calmod]"  # метка идемпотентности: есть в файле -> уже пропатчено
 MARK_ORIENT = "[calmod-orient]"  # хук 3: ориентация Standby
+MARK_INPUT = "[calmod-input]"    # хук 4: перехват ввода вложенными экранами
 
 # Заголовок грани в UI. Остальные 30+ языков подхватят английский по fallback
 # (gen_i18n.py: "missing in <lang>, using English fallback").
@@ -139,6 +140,30 @@ def standby_orientation(s: str) -> str:
     return s
 
 
+def standby_input(s: str) -> str:
+    """Хук 4: вложенные экраны (погода, день, год) перехватывают ввод ДО активности.
+
+    Стендбай сам разбирает тап (инверсия, координаты не передаёт), свайпы ←/→ (смена граней) и Back (выход),
+    поэтому иначе экран «Погода» нельзя ни открыть тапом, ни закрыть Back'ом, ни листать свайпом.
+    Ставится сразу после хука ориентации в начале StandbyActivity::loop(); CalendarFace::handleInput возвращает
+    true, если событие поглощено (тогда активность ничего больше не делает).
+    """
+    if MARK_INPUT in s:
+        return s
+    anchor = f"  if (calendar_orientation::sync(renderer)) requestUpdate();  // {MARK_ORIENT}"
+    if s.count(anchor) != 1:
+        sys.exit("ANCHOR LOST: хук ввода ставится после хука ориентации в StandbyActivity::loop() — его нет")
+    add = (
+        f"\n  if (CalendarFace::handleInput(mappedInput, mode_ == DisplayMode::Immersive)) {{  // {MARK_INPUT}"
+        "\n    lastInputMs_ = millis();"
+        "\n    mode_ = DisplayMode::Normal;"
+        "\n    requestUpdate();"
+        "\n    return;"
+        "\n  }"
+    )
+    return s.replace(anchor, anchor + add, 1)
+
+
 def yaml_key(key: str, value: str):
     """Дописать ключ в конец YAML, если его там ещё нет."""
     def fn(s: str) -> str:
@@ -159,6 +184,7 @@ def main() -> None:
     print(f"Применяю хуки в {root}")
     patch(root, "src/activities/apps/standby/StandbyActivity.cpp", standby_activity)
     patch(root, "src/activities/apps/standby/StandbyActivity.cpp", standby_orientation)
+    patch(root, "src/activities/apps/standby/StandbyActivity.cpp", standby_input)
     for fname, value in I18N_VALUES.items():
         patch(root, f"lib/I18n/translations/{fname}", yaml_key(I18N_KEY, value))
     print("Готово.")

@@ -75,6 +75,28 @@ int main(int argc, char** argv) {
       Cache t = keep; CHECK(!parseCache(bad, std::strlen(bad), t)); CHECK(t.place.lat == 11);
     }
   }
+  // --- Прогноз 24 ч + 7 дней: настоящий ответ ---
+  {
+    const std::string j = slurp((dir + "/openmeteo_moscow_7d.json").c_str());
+    Forecast f; CHECK(parseForecastDetail(j.data(), j.size(), 5000, f));
+    CHECK(f.valid && f.nHours == 24 && f.nDays == 7 && f.utcOffsetSec == 10800 && f.fetchedEpoch == 5000);
+    for (int i = 1; i < 24; ++i) CHECK(f.h[i].ts == f.h[i - 1].ts + 3600);
+    for (int i = 1; i < 7; ++i) CHECK(f.d[i].ts == f.d[i - 1].ts + 86400);
+    for (int i = 0; i < 7; ++i) CHECK(!std::isnan(f.d[i].tMax) && !std::isnan(f.d[i].tMin) && f.d[i].tMin <= f.d[i].tMax && f.d[i].code >= 0 && f.d[i].prob >= 0);
+    for (int i = 0; i < 24; ++i) CHECK(!std::isnan(f.h[i].temp) && f.h[i].code >= 0 && f.h[i].prob >= 0);
+    // День/ночь по часам: в ответе есть и то и другое
+    bool day = false, night = false; for (int i = 0; i < 24; ++i) (f.h[i].isDay ? day : night) = true; CHECK(day && night);
+    // кэш v2: круг с NaN
+    Cache c; c.fc = f; c.fc.h[3].temp = NAN; c.fc.d[2].windMax = NAN; c.fc.d[1].prob = -1;
+    const std::string sj = serializeCache(c); Cache r; CHECK(parseCache(sj.data(), sj.size(), r));
+    CHECK(r.fc.valid && r.fc.nHours == 24 && r.fc.nDays == 7 && r.fc.utcOffsetSec == 10800 && r.fc.fetchedEpoch == 5000);
+    CHECK(std::isnan(r.fc.h[3].temp) && r.fc.h[4].temp == f.h[4].temp && r.fc.h[23].ts == f.h[23].ts && r.fc.h[5].isDay == f.h[5].isDay);
+    CHECK(std::isnan(r.fc.d[2].windMax) && r.fc.d[1].prob == -1 && r.fc.d[6].code == f.d[6].code && r.fc.d[0].ts == f.d[0].ts);
+    // кэш v1 (без прогноза) читается: прогноза нет, место есть
+    const char* v1 = R"({"v":1,"place":{"lat":10.5,"lon":20.5,"city":"X","ip":1,"ipAt":3,"ipLang":0}})";
+    Cache o; CHECK(parseCache(v1, std::strlen(v1), o)); CHECK(!o.fc.valid && !o.weather.valid && o.place.lat == 10.5);
+    // мусор в прогнозе
+    for (const char* bad : {"", "{}", "{\"hourly\":{\"time\":[]},\"daily\":{\"time\":[]}}", "{\"hourly\":{\"time\":[0]}}", "not json"}) { Forecast g = f; CHECK(!parseForecastDetail(bad, std::strlen(bad), 1, g)); CHECK(g.nHours == 24 && g.fetchedEpoch == 5000); }  }
   // --- Таблица WMO: все коды из документации Open-Meteo покрыты во всех языках ---
   for (int code : {0,1,2,3,45,48,51,53,55,56,57,61,63,65,66,67,71,73,75,77,80,81,82,85,86,95,96,99}) {
     for (Lang l : {Lang::En, Lang::Ru, Lang::De}) CHECK(description(l, code)[0] != '\0');
@@ -86,7 +108,7 @@ int main(int argc, char** argv) {
   { char b[6]; copyUtf8(b, sizeof(b), "Москва"); CHECK(std::string(b) == "Мо"); }   // 2+2 байта + \0, третий символ не влезает
   { char b[5]; copyUtf8(b, sizeof(b), "Москва"); CHECK(std::string(b) == "Мо"); }
   // --- URL ---
-  { char u[400]; int n = buildForecastUrl(55.7558, 37.6173, u, sizeof(u)); CHECK(n > 0 && n < (int)sizeof(u) && std::string(u).find("latitude=55.7558&longitude=37.6173") != std::string::npos);
+  { char u[700]; int n = buildForecastUrl(55.7558, 37.6173, u, sizeof(u)); CHECK(n > 0 && n < (int)sizeof(u) && std::string(u).find("latitude=55.7558&longitude=37.6173") != std::string::npos);
     n = buildGeoUrl(Lang::Ru, u, sizeof(u)); CHECK(n > 0 && std::string(u).find("lang=ru") != std::string::npos); }
   std::printf("weather: ошибок %d\n", fails);
   return fails;

@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Прототип: тап по погоде и календарю — CrossMux Calendar</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#f3f2ee;--fg:#1a1a19;--mut:#6a6964;--card:#fff;--line:#d8d6cf;--acc:#b3261e}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#151514;--fg:#eceae4;--mut:#a3a19a;--card:#20201e;--line:#38372f}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:1180px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;margin:0 0 4px}
+p.s{color:var(--mut);margin:0 0 14px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center}
+.bar .lbl{color:var(--mut);font-size:13px;margin-right:2px}
+.bar button,.hw button{font:inherit;padding:6px 13px;border:1px solid var(--line);background:var(--card);color:var(--fg);border-radius:999px;cursor:pointer}
+.bar button[aria-pressed=true]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.hw{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 16px;align-items:center}
+.hw button{border-radius:8px;min-width:64px}
+.hw .lbl{color:var(--mut);font-size:13px}
+.stage{display:flex;flex-wrap:wrap;gap:30px;justify-content:center;align-items:flex-start}
+[data-mode=p] .fl,[data-mode=l] .fp{display:none}
+figure{margin:0;text-align:center}
+figcaption{color:var(--mut);font-size:13px;margin-top:16px}
+.wrap{position:relative;margin:8px auto}
+.scr{position:absolute;left:0;top:0;transform-origin:0 0;background:#ecebe6;color:#151515;font-family:Ubuntu,"Noto Sans","Segoe UI",Roboto,system-ui,sans-serif;overflow:hidden;box-shadow:0 0 0 12px #23231f,0 0 0 14px #000;user-select:none;touch-action:none}
+.inv .scr{filter:invert(1)}
+.p{width:480px;height:800px;padding:0 24px}
+.l{width:800px;height:480px;display:flex}
+.lw{width:800px;height:480px;padding:0 24px;position:relative}
+[data-act]{cursor:pointer}
+/* тап-зоны */
+.zones [data-act]{outline:2px dashed var(--acc);outline-offset:-2px;position:relative}
+.zones [data-act]::after{content:attr(data-zone);position:absolute;right:2px;bottom:2px;background:var(--acc);color:#fff;font:600 11px/1.3 system-ui,sans-serif;padding:0 5px;border-radius:3px;z-index:5;pointer-events:none}
+.zones .grid [data-act]::after{content:none}
+.zones .grid [data-act]{outline-width:1px}
+/* общие */
+.sb{display:flex;justify-content:space-between;align-items:center;height:34px;font-size:15px;color:#3d3d3a;padding:6px 0 0}
+.sb b{font-weight:400}
+.bat{display:flex;align-items:center;gap:5px}
+.hdr{display:flex;align-items:center;justify-content:space-between;height:50px;border-bottom:2px solid #151515;margin-bottom:8px}
+.hdr .ttl{font-size:21px;font-weight:700}
+.chip{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border:2px solid #151515;border-radius:999px;font-size:16px;font-weight:600;background:#ecebe6}
+.chip.fill{background:#151515;color:#ecebe6}
+.dots{display:flex;gap:8px}.dots i{width:12px;height:12px;border-radius:50%;border:2px solid #151515}.dots i.on{background:#151515}
+.mut{color:#5f5f5b}
+.rule{border-top:2px solid #151515}
+/* главный экран */
+.time{font-size:146px;font-weight:500;letter-spacing:-2px;line-height:1;text-align:center;margin-top:0;font-variant-numeric:tabular-nums}
+.wd{font-size:23px;font-weight:700;text-align:center;line-height:1.25;margin-top:2px}
+.dt{display:flex;justify-content:center;align-items:center;gap:10px;font-size:23px;line-height:1.3}
+.dt em{font-style:normal;font-size:17px;font-weight:700;border:2px solid #151515;border-radius:999px;padding:0 10px}
+.chips{text-align:center;font-size:17px;font-weight:600;margin:4px 0 8px}
+.wx{border-top:2px solid #151515;border-bottom:2px solid #151515;padding:8px 0 6px;margin-bottom:6px}
+.loc{display:flex;justify-content:space-between;font-size:17px;font-weight:700;margin-bottom:2px}
+.loc span:last-child{font-weight:500}
+.r1{display:flex;align-items:center;gap:14px;height:58px}
+.t{font-size:52px;font-weight:500;line-height:1}
+.c{font-size:24px;font-weight:700;line-height:1.15}.c small{display:block;font-size:17px;font-weight:500}
+.dl{text-align:center;font-size:17px;font-weight:600;line-height:1.35}
+.mh{text-align:center;font-size:23px;font-weight:700;height:40px;padding-top:3px}
+.mh span{display:inline-block;padding:0 4px}
+.mh.br span{background:#151515;color:#ecebe6;border-radius:10px;padding:0 14px}
+.grid{display:grid;grid-template-columns:repeat(7,1fr);grid-auto-rows:43px}
+.grid .h{height:30px;font-size:16px;font-weight:600;text-align:center;border-bottom:2px solid #151515;padding-top:2px}
+.grid .h.we{font-weight:800}
+.grid>div{display:flex;align-items:center;justify-content:center;font-size:23px}
+.grid .c{margin:3px;border-radius:0;position:relative}
+.grid .o{font-size:17px;font-weight:600}
+.grid .we{background:repeating-conic-gradient(#ecebe6 0 25%,#b9b8b1 0 50%) 0 0/4px 4px}
+.grid .td{background:#151515;color:#ecebe6;font-weight:700;border-radius:10px}
+.l .grid{grid-auto-rows:64px}
+.l .lp{width:328px;padding:0 14px;border-right:2px solid #151515;height:480px}
+.l .rp{flex:1;padding:0 24px}
+.l .time{font-size:106px}.l .wd{font-size:20px}.l .dt{font-size:20px;flex-wrap:wrap;gap:4px 10px}.l .chips{font-size:15px}
+.l .t{font-size:38px}.l .r1{height:44px;gap:10px}.l .c{font-size:17px}.l .c small{font-size:14px}.l .loc{font-size:15px}.l .dl{font-size:15px}
+.l .wx{border-bottom:0}
+/* погода */
+.cur{display:flex;align-items:center;gap:14px;height:76px}
+.cur .t{font-size:60px}
+.cur .rg{margin-left:auto;text-align:right;font-size:17px;font-weight:600;line-height:1.3}
+.gcap{display:flex;gap:16px;font-size:14px;font-weight:600;color:#5f5f5b;margin:2px 0 6px;flex-wrap:wrap}
+.tbl{display:grid;font-size:18px}
+.tbl .row{display:grid;grid-template-columns:70px 40px 1fr 88px 96px;align-items:center;height:39px;border-top:1px solid #b9b8b1;font-weight:600}
+.tbl .row:first-child{border-top:2px solid #151515}
+.tbl .row.now{border:2px solid #151515;border-radius:8px;background:#dcdbd4}
+.tbl .row .r{text-align:right}
+.tbl .row .mid{font-size:22px;font-weight:700}
+.foot{font-size:14px;color:#5f5f5b;margin-top:6px;display:flex;justify-content:space-between;gap:8px}
+.wk .row{display:grid;grid-template-columns:96px 46px 1fr 96px;align-items:center;height:80px;border-top:1px solid #b9b8b1;padding:0 2px}
+.wk .row:first-child{border-top:2px solid #151515}
+.wk .row.today{background:#dcdbd4}
+.wk .row.we .d{font-weight:800}
+.wk .d{font-size:19px;font-weight:600;line-height:1.2}.wk .d small{display:block;font-size:15px;font-weight:500;color:#5f5f5b}
+.wk .rngw{display:flex;align-items:center;gap:8px;font-size:19px;font-weight:700;padding:0 6px}
+.wk .trk{position:relative;flex:1;height:10px;border:2px solid #151515;border-radius:6px;background:#ecebe6}
+.wk .trk i{position:absolute;top:-2px;bottom:-2px;background:#151515;border-radius:6px}
+.wk .pr{text-align:right;font-size:16px;font-weight:600;line-height:1.3}
+.l .wk .row{grid-template-columns:130px 46px 1fr 130px 100px;height:50px}
+.l .wk .wnd{text-align:right;font-size:16px;font-weight:600}
+.l .tbl .row{height:27px;font-size:15px}
+.l .tbl .row .mid{font-size:17px}
+/* день */
+.big{font-size:23px;font-weight:700;text-align:center;line-height:1.3}
+.rel{display:inline-block;font-size:16px;font-weight:700;border:2px solid #151515;border-radius:999px;padding:0 10px;margin-left:8px;vertical-align:2px}
+.card{border:2px solid #151515;border-radius:12px;padding:8px 12px;margin:0 0 8px}
+.card h4{margin:0 0 3px;font-size:14px;letter-spacing:.06em;text-transform:uppercase;color:#5f5f5b;font-weight:700}
+.card .v{font-size:20px;font-weight:700;line-height:1.3}
+.card .m{font-size:16px;font-weight:500;color:#3d3d3a;line-height:1.35}
+.cols{display:flex;gap:10px}.cols>*{flex:1}
+.nav{display:flex;gap:10px;position:absolute;left:24px;right:24px;bottom:16px}
+.nav .chip{flex:1;justify-content:center;height:44px}
+.l .nav{left:14px;right:auto;width:300px}
+.hol{font-size:17px;font-weight:700;text-align:center;border:2px dashed #151515;border-radius:10px;padding:4px;margin-bottom:8px}
+/* год */
+.yg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 12px}
+.l .yg{grid-template-columns:repeat(4,1fr);gap:4px 14px}
+.mm{padding:2px;border-radius:8px}
+.mm b{display:block;text-align:center;font-size:16px;line-height:1.5;margin-bottom:1px}
+.mm.mc b{background:#151515;color:#ecebe6;border-radius:8px}
+.mg{display:grid;grid-template-columns:repeat(7,1fr);font-size:13px;text-align:center;line-height:19px;font-weight:600}
+.mg i{font-style:normal}
+.l .mg{line-height:14px;font-size:12px}
+.mg .h{color:#5f5f5b;font-weight:700}.mg .o{visibility:hidden}.mg .w{color:#151515;font-weight:800}
+.mg .n{font-weight:500}.mg .td{background:#151515;color:#ecebe6;border-radius:4px;font-weight:700}
+.mg .hd{text-decoration:underline}
+/* заметки */
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-top:30px}
+.notes div{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;font-size:14px}
+.notes h3{margin:0 0 4px;font-size:15px}
+code{font:12.5px ui-monospace,Menlo,Consolas,monospace;background:var(--line);padding:1px 5px;border-radius:4px}
+#toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#151515;color:#ecebe6;padding:8px 16px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9}
+#toast.on{opacity:.95}
+#tmr{color:var(--mut);font-size:13px;margin-left:8px}
+</style>
+</head>
+<body data-mode="a">
+<main>
+<h1>Прототип: тап по погоде и по календарю</h1>
+<p class="s">M5Stack Paper Mono · 480×800 · интерактивный. Кликайте по экрану как по тач-панели, тяните мышью для свайпа, или жмите «аппаратные кнопки» ниже. Погода — реальный прогноз Open-Meteo для Москвы, восход/закат и луна посчитаны.</p>
+<div class="bar" role="group" aria-label="Вид">
+<span class="lbl">Вид:</span>
+<button data-m="a" aria-pressed="true">Оба</button>
+<button data-m="p" aria-pressed="false">Вертикально</button>
+<button data-m="l" aria-pressed="false">Горизонтально</button>
+<button id="inv" aria-pressed="false">Инверсия</button>
+<button id="zn" aria-pressed="false">Показать тап-зоны</button>
+</div>
+<div class="bar" role="group" aria-label="Экран">
+<span class="lbl">Перейти к:</span>
+<button data-s="main">Главный</button>
+<button data-s="wx0">Погода · сегодня</button>
+<button data-s="wx1">Погода · 7 дней</button>
+<button data-s="day">День</button>
+<button data-s="year">Год</button>
+<span id="tmr"></span>
+</div>
+<div class="hw" role="group" aria-label="Аппаратные кнопки">
+<span class="lbl">Кнопки (или клавиши):</span>
+<button data-k="Left" title="Left / ←">◀ Left</button><button data-k="Right" title="Right / →">▶ Right</button>
+<button data-k="Up" title="Up / ↑">▲ Up</button><button data-k="Down" title="Down / ↓">▼ Down</button>
+<button data-k="Confirm" title="Confirm / Enter">● Confirm</button><button data-k="Back" title="Back / Esc">↩ Back</button>
+</div>
+<div class="stage">
+<figure class="fp"><div class="wrap" data-w="480" data-h="800"><div class="scr p" id="P"></div></div><figcaption>Вертикально · 480×800</figcaption></figure>
+<figure class="fl"><div class="wrap" data-w="800" data-h="480"><div class="scr l" id="L"></div></div><figcaption>Горизонтально · 800×480</figcaption></figure>
+</div>
+<section class="notes">
+<div><h3>Что делает тап на главном экране</h3>Блок погоды → прогноз (сегодня по часам / 7 дней). Число в сетке → карточка дня. Название месяца → обзор года. Любое другое место — как сейчас: инверсия. Включите «Показать тап-зоны».</div>
+<div><h3>Внутри экранов</h3>Свайп или Left/Right листают: погода — страницы «сегодня ⇄ 7 дней», день — ±1 день, год — ±1 год. Up/Down: день ±1 неделя, год ±1 год. Back и ✕ закрывают (сначала экран, потом главная). Через 60 с без ввода — автозакрытие.</div>
+<div><h3>Почему не «просто ещё одна грань»</h3>Стендбай сам обрабатывает тап (инверсия, координаты не передаёт), свайпы ←/→ и Back. Пока открыт вложенный экран, вход перехватывает грань — нужен четвёртый хук (см. CONCEPT.md §12).</div>
+<div><h3>Данные</h3>Один запрос Open-Meteo: текущая погода + 24 часа + 7 дней ≈ 2 КБ. Восход/закат/луна считаются на устройстве, без сети. Прогноз и «День» работают и офлайн — по кэшу. Фаза луны в прототипе — средняя (ошибка до суток); на устройстве — точный расчёт.</div>
+</section>
+</main>
+<div id="toast"></div>
+<script>
+const DATA={"now":{"t":16.0,"f":15.1,"code":3,"wind":2.4,"day":0,"ts":1789920900},"off":10800,"h":{"ts":[1789920000,1789923600,1789927200,1789930800,1789934400,1789938000,1789941600,1789945200,1789948800,1789952400,1789956000,1789959600,1789963200,1789966800,1789970400,1789974000,1789977600,1789981200,1789984800,1789988400,1789992000,1789995600,1789999200,1790002800],"t":[16.2,15.4,14.9,14.3,14.0,13.8,13.8,13.9,13.8,13.6,13.6,13.4,13.3,13.8,14.9,16.4,17.8,18.2,18.6,18.9,18.8,18.8,18.9,18.7],"c":[3,3,1,3,2,2,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,2,2],"p":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,0,0,0,0,0,3,0,0],"w":[2.4,2.61,2.72,2.63,2.52,2.41,2.53,2.45,2.26,2.24,2.02,1.9,2.1,2.2,2.1,2.51,2.92,3.22,3.34,2.93,2.73,1.68,1.14,1.35],"d":[0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1]},"d":{"ts":[1789851600,1789938000,1790024400,1790110800,1790197200,1790283600,1790370000],"c":[3,3,95,80,61,80,3],"max":[18.9,18.9,18.9,17.2,16.7,15.3,17.7],"min":[9.9,13.3,13.3,14.7,10.4,9.0,9.0],"mm":[0.0,0.0,6.5,13.4,15.5,1.5,0.0],"p":[0,10,53,43,70,30,27],"w":[3.16,3.34,3.05,3.2,3.62,2.65,2.98]}};
+const MN=['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'],
+GN=['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'],
+WDF=['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'],
+WDS=['Вс','Пн','Вт','Ср','Чт','Пт','Сб'],DH=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+const PLACE={name:'Москва',lat:55.7558,lon:37.6173,off:180};
+const NOW={y:2026,m:9,d:20,hh:18,mm:55};
+const HOL={'1-1':'Новый год','1-7':'Рождество Христово','2-23':'День защитника Отечества','3-8':'Международный женский день','5-1':'Праздник Весны и Труда','5-9':'День Победы','6-12':'День России','11-4':'День народного единства'};
+const p2=n=>String(n).padStart(2,'0'),fmt=(v,n=0)=>v==null?'--':(Math.round(v*10**n)/10**n).toFixed(n).replace('.',',');
+const deg=v=>v==null?'--':Math.round(v)+'°';
+/* ---------- календарная логика (порт CalendarCore) ---------- */
+const dim=(y,m)=>new Date(y,m,0).getDate();
+const dow=(y,m,d)=>(new Date(y,m-1,d).getDay()+6)%7;           // 0 = Пн
+const doy=(y,m,d)=>Math.round((Date.UTC(y,m-1,d)-Date.UTC(y,0,0))/864e5);
+const iso=(y,m,d)=>{const t=new Date(Date.UTC(y,m-1,d)),n=t.getUTCDay()||7;t.setUTCDate(t.getUTCDate()+4-n);return Math.ceil(((t-Date.UTC(t.getUTCFullYear(),0,1))/864e5+1)/7)};
+const addDays=(o,n)=>{const t=new Date(o.y,o.m-1,o.d+n);return{y:t.getFullYear(),m:t.getMonth()+1,d:t.getDate()}};
+const diffDays=(a,b)=>Math.round((Date.UTC(a.y,a.m-1,a.d)-Date.UTC(b.y,b.m-1,b.d))/864e5);
+const addMonths=(y,m,k)=>{const i=y*12+m-1+k;return{y:Math.floor(i/12),m:i%12+1}};
+/* ---------- восход/закат (NOAA, порт SunTimes.cpp) ---------- */
+function sunTimes(y,m,d){
+  const R=Math.PI/180,jd0=Date.UTC(y,m-1,d)/864e5+2440587.5;
+  function pos(t){const l0=(280.46646+t*(36000.76983+t*0.0003032))%360,mm=357.52911+t*(35999.05029-0.0001537*t),e=0.016708634-t*(0.000042037+0.0000001267*t),mr=mm*R;
+    const c=Math.sin(mr)*(1.914602-t*(0.004817+0.000014*t))+Math.sin(2*mr)*(0.019993-0.000101*t)+Math.sin(3*mr)*0.000289,tl=l0+c,om=125.04-1934.136*t,lam=tl-0.00569-0.00478*Math.sin(om*R);
+    const e0=23+(26+(21.448-t*(46.815+t*(0.00059-t*0.001813)))/60)/60,eps=e0+0.00256*Math.cos(om*R),dec=Math.asin(Math.sin(eps*R)*Math.sin(lam*R));
+    let y2=Math.tan(eps*R/2);y2*=y2;const l0r=l0*R;
+    const eq=y2*Math.sin(2*l0r)-2*e*Math.sin(mr)+4*e*y2*Math.sin(mr)*Math.cos(2*l0r)-0.5*y2*y2*Math.sin(4*l0r)-1.25*e*e*Math.sin(2*mr);
+    return{eq:4*eq/R,dec}}
+  const ev=rise=>{let mn=720;for(let i=0;i<2;i++){const s=pos((jd0+mn/1440-2451545)/36525),ch=Math.cos(90.833*R)/(Math.cos(PLACE.lat*R)*Math.cos(s.dec))-Math.tan(PLACE.lat*R)*Math.tan(s.dec);
+    const ha=Math.acos(Math.max(-1,Math.min(1,ch)))/R;mn=720-4*(PLACE.lon+(rise?ha:-ha))-s.eq}return((Math.round(mn)+PLACE.off)%1440+1440)%1440};
+  const a=ev(true),b=ev(false);return{rise:a,set:b,len:b-a}}
+const hm=v=>p2(Math.floor(v/60))+':'+p2(v%60);
+/* ---------- луна (средняя фаза; на устройстве — Meeus гл.49) ---------- */
+const SYN=29.530588853;
+const moonAge=(y,m,d)=>{const jd=Date.UTC(y,m-1,d,12)/864e5+2440587.5;let a=(jd-2451550.26)%SYN;return a<0?a+SYN:a};
+function moonName(a){return a<1.85?'Новолуние':a<5.54?'Растущий серп':a<9.22?'Первая четверть':a<12.91?'Растущая луна':a<16.61?'Полнолуние':a<20.3?'Убывающая луна':a<23.99?'Последняя четверть':a<27.68?'Убывающий серп':'Новолуние'}
+function nextMoon(date,target){for(let i=1;i<40;i++){const n=addDays(date,i),a0=moonAge(...Object.values(addDays(date,i-1))),a1=moonAge(n.y,n.m,n.d);
+  if(target===0?a1<a0:(a0<SYN/2&&a1>=SYN/2))return n}return null}
+function moonSvg(a,s=52){const r=s/2-3,c=s/2,k=Math.cos(2*Math.PI*a/SYN),rx=Math.abs(k)*r,wax=a<SYN/2,sw=k>0?0:1;
+  const lit=`<path d="M${c} ${c-r}A${r} ${r} 0 0 1 ${c} ${c+r}A${rx} ${r} 0 0 ${sw} ${c} ${c-r}z" fill="#151515"/>`;
+  return`<svg width="${s}" height="${s}" viewBox="0 0 ${s} ${s}"><circle cx="${c}" cy="${c}" r="${r}" fill="#ecebe6" stroke="#151515" stroke-width="3"/><g ${wax?'':`transform="translate(${s} 0) scale(-1 1)"`}>${lit}</g></svg>`}
+/* ---------- иконки погоды ---------- */
+const CL='<path d="M13 41h28a10 10 0 0 0 1.5-19.9A14 14 0 0 0 15 26 8 8 0 0 0 13 41z" fill="#ecebe6"/>';
+const SUN=(x,y,r)=>{let s=`<circle cx="${x}" cy="${y}" r="${r}" fill="#ecebe6"/>`;for(let i=0;i<8;i++){const a=i*Math.PI/4,c=Math.cos(a),n=Math.sin(a);s+=`<path d="M${x+c*(r+4)} ${y+n*(r+4)}L${x+c*(r+9)} ${y+n*(r+9)}"/>`}return s};
+const MOON=(x,y,r)=>`<path d="M${x+r*.6} ${y-r}a${r} ${r} 0 1 0 ${r*.5} ${r*1.7} ${r*.85} ${r*.85} 0 0 1 ${-r*.5} ${-r*1.7}z" fill="#ecebe6"/>`;
+function kind(code,day){if(code<=1)return day?'sun':'moon';if(code===2)return day?'part':'partn';if(code===3)return'cloud';if(code<=48)return'fog';if(code<=57)return'drz';if(code<=67||(code>=80&&code<=82))return'rain';if(code<=77||code===85||code===86)return'snow';return'thn'}
+function ico(code,day=1,s=44){const k=kind(code,day);let b='';
+  if(k==='sun')b=SUN(28,28,9);else if(k==='moon')b=MOON(28,28,12);
+  else if(k==='part')b=SUN(20,20,7)+'<g transform="translate(5 3) scale(.85)">'+CL+'</g>';
+  else if(k==='partn')b=MOON(20,20,9)+'<g transform="translate(5 3) scale(.85)">'+CL+'</g>';
+  else if(k==='cloud')b='<g transform="translate(0 -3)">'+CL+'</g>';
+  else if(k==='fog')b='<path d="M8 18h34M14 27h34M8 36h34M14 45h30"/>';
+  else{b='<g transform="translate(0 -8) scale(1)">'+CL+'</g>';
+    if(k==='rain')b+='<path d="M20 42l-3 8M29 42l-3 8M38 42l-3 8"/>';
+    if(k==='drz')b+='<path d="M20 45v3M29 45v3M38 45v3M24 50v2M33 50v2"/>';
+    if(k==='snow')b+='<path d="M20 44v6M17 47h6M30 44v6M27 47h6M40 44v6M37 47h6"/>';
+    if(k==='thn')b+='<path d="M31 32l-7 10h9l-7 10"/>'}
+  return`<svg width="${s}" height="${s}" viewBox="0 0 56 56" fill="none" stroke="#151515" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">${b}</svg>`}
+const WMO={0:'Ясно',1:'Малооблачно',2:'Облачно',3:'Пасмурно',45:'Туман',48:'Изморозь',51:'Слабая морось',53:'Морось',55:'Сильная морось',61:'Небольшой дождь',63:'Дождь',65:'Сильный дождь',71:'Небольшой снег',73:'Снег',75:'Сильный снег',80:'Ливень',81:'Ливень',82:'Сильный ливень',95:'Гроза',96:'Гроза с градом',99:'Гроза с градом'};
+const desc=c=>WMO[c]||'Нет данных';
+const bat='<span class="bat"><svg width="30" height="15" viewBox="0 0 30 15"><rect x="1" y="1" width="25" height="13" rx="2" fill="none" stroke="#151515" stroke-width="2"/><rect x="27" y="5" width="2.5" height="5" fill="#151515"/><rect x="3.5" y="3.5" width="16" height="8" fill="#151515"/></svg>82%</span>';
+const LW=x=>`<div class="lw">${sbar}${x}</div>`;
+const sbar='<div class="sb"><span>UTC+3</span><span>Календарь</span>'+bat+'</div>';
+const hourLocal=ts=>new Date((ts+DATA.off)*1000).getUTCHours();
+/* ---------- состояние ---------- */
+const S={screen:'main',page:0,date:{y:NOW.y,m:NOW.m,d:NOW.d},vm:{y:NOW.y,m:NOW.m},year:NOW.y};
+/* ---------- главный экран ---------- */
+function info(L){const dt=new Date(NOW.y,NOW.m-1,NOW.d);
+  return`<div class="time">${NOW.hh}:${p2(NOW.mm)}</div><div class="wd">${WDF[dt.getDay()]}</div><div class="dt"><span>${NOW.d} ${GN[NOW.m-1]} ${NOW.y}</span><em>${p2(NOW.d)}.${p2(NOW.m)}.${NOW.y}</em></div><div class="chips">Нед. ${iso(NOW.y,NOW.m,NOW.d)} · День ${doy(NOW.y,NOW.m,NOW.d)} / 365</div>`}
+function sunLines(dt){const s=sunTimes(dt.y,dt.m,dt.d);return`<div class="dl">Восход ${hm(s.rise)} · Закат ${hm(s.set)}</div><div class="dl">Длина дня ${Math.floor(s.len/60)} ч ${p2(s.len%60)} мин</div>`}
+function wxBlock(L){const n=DATA.now;
+  return`<div class="wx" data-act="wx" data-zone="тап → погода">
+  <div class="loc"><span>${PLACE.name}</span>${L?'':'<span>обн. 18:55</span>'}</div>
+  <div class="r1">${ico(n.code,n.day,L?44:56)}<span class="t">${deg(n.t)}</span><span class="c">${desc(n.code)}<small>ощущ. ${deg(n.f)}</small></span></div>
+  <div class="dl">${L?'ощущ. '+deg(n.f)+' · ':''}мин ${deg(DATA.d.min[0])} · макс ${deg(DATA.d.max[0])}${L?'':' · ветер '+Math.round(n.wind)+' м/с'}</div>
+  <div class="dl">${L?'ветер '+Math.round(n.wind)+' м/с · ':''}осадки ${fmt(DATA.d.mm[0],1)} мм (${DATA.d.p[0]} %)</div>${sunLines(NOW)}</div>`}
+function monthGrid(y,m,L,clickable=true){const lead=dow(y,m,1),n=dim(y,m),rows=Math.ceil((lead+n)/7),py=addMonths(y,m,-1),pd=dim(py.y,py.m);
+  let h=DH.map((x,i)=>`<div class="h ${i>4?'we':''}">${x}</div>`).join('');
+  for(let i=0;i<rows*7;i++){const rel=i-lead,c=i%7;let cls='c',num,act='';
+    if(rel<0){cls+=' o';num=pd+rel+1}else if(rel>=n){cls+=' o';num=rel-n+1}else{num=rel+1;if(c>4)cls+=' we';if(y===NOW.y&&m===NOW.m&&num===NOW.d)cls+=' td';act=` data-act="day:${y}-${m}-${num}" data-zone="тап → день"`}
+    h+=`<div class="${cls}"${act}>${num}</div>`}return h}
+function mainScreen(L){const b=S.vm.y!==NOW.y||S.vm.m!==NOW.m;
+  const mh=`<div class="mh ${b?'br':''}" data-act="year" data-zone="тап → год"><span>${MN[S.vm.m-1]} ${S.vm.y}</span></div><div class="grid">${monthGrid(S.vm.y,S.vm.m,L)}</div>`;
+  return L?`<div class="lp">${sbar}${info(L)}${wxBlock(L)}</div><div class="rp"><div style="height:34px"></div>${mh}</div>`:sbar+info(L)+wxBlock(L)+mh}
+/* ---------- погода: детали ---------- */
+function graph(W,H){const h=DATA.h,n=h.t.length,pl=10,pr=10,top=24,bot=H-56,bx=H-52,bh=30,st=(W-pl-pr)/(n-1),xi=i=>pl+i*st;
+  const mn=Math.min(...h.t)-1.5,mx=Math.max(...h.t)+1.5,yi=v=>top+(mx-v)/(mx-mn)*(bot-top);
+  let s=`<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="inherit"><defs><pattern id="dp${W}" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="4" fill="#ecebe6"/><rect width="2" height="2" fill="#b9b8b1"/><rect x="2" y="2" width="2" height="2" fill="#b9b8b1"/></pattern></defs>`;
+  for(let i=0;i<n;){if(!h.d[i]){let j=i;while(j+1<n&&!h.d[j+1])j++;s+=`<rect x="${Math.max(0,xi(i)-st/2)}" y="0" width="${Math.min(W,xi(j)+st/2)-Math.max(0,xi(i)-st/2)}" height="${H-20}" fill="url(#dp${W})"/>`;i=j+1}else i++}
+  s+=`<line x1="${pl}" y1="${bx+bh}" x2="${W-pr}" y2="${bx+bh}" stroke="#151515" stroke-width="2"/>`;
+  h.p.forEach((p,i)=>{const bh2=p/100*bh;if(p>0)s+=`<rect x="${xi(i)-st*.32}" y="${bx+bh-bh2}" width="${st*.64}" height="${bh2}" fill="#151515"/>`});
+  s+=`<polyline points="${h.t.map((t,i)=>xi(i)+','+yi(t)).join(' ')}" fill="none" stroke="#151515" stroke-width="3" stroke-linejoin="round"/>`;
+  h.t.forEach((t,i)=>{if(i%3===0){s+=`<circle cx="${xi(i)}" cy="${yi(t)}" r="5" fill="#151515"/><text x="${xi(i)}" y="${yi(t)-10}" font-size="15" font-weight="700" text-anchor="middle">${Math.round(t)}°</text>`;
+    s+=`<text x="${xi(i)}" y="${H-4}" font-size="14" font-weight="600" text-anchor="middle">${p2(hourLocal(h.ts[i]))}</text>`}});
+  return s+'</svg>'}
+function hourRows(step=3){const h=DATA.h;let r='';for(let i=0;i<h.t.length;i+=step){const hh=p2(hourLocal(h.ts[i]))+':00';
+  r+=`<div class="row ${i===0?'now':''}"><span class="mid">${hh}</span><span>${ico(h.c[i],h.d[i],30)}</span><span class="mid">${deg(h.t[i])}</span><span class="r">${h.p[i]} %</span><span class="r">${fmt(h.w[i],0)} м/с</span></div>`}return r}
+function weekRows(L){const D=DATA.d,gmin=Math.min(...D.min),gmax=Math.max(...D.max);let r='';
+  for(let i=0;i<D.ts.length;i++){const dt=addDays(NOW,i),w=new Date(dt.y,dt.m-1,dt.d).getDay(),we=w===0||w===6;
+    const l=(D.min[i]-gmin)/(gmax-gmin)*100,wd=(D.max[i]-D.min[i])/(gmax-gmin)*100;
+    r+=`<div class="row ${i===0?'today':''} ${we?'we':''}"><span class="d">${i===0?'Сегодня':WDS[w]+' '+dt.d}<small>${i===0?WDS[w]+' '+dt.d+' '+GN[dt.m-1].slice(0,3):GN[dt.m-1]}</small></span><span>${ico(D.c[i],1,40)}</span>
+    <span class="rngw"><span>${deg(D.min[i])}</span><span class="trk"><i style="left:${l}%;width:${Math.max(wd,4)}%"></i></span><span>${deg(D.max[i])}</span></span>
+    <span class="pr">${fmt(D.mm[i],1)} мм<br>${D.p[i]} %</span>${L?`<span class="wnd">${fmt(D.w[i],0)} м/с</span>`:''}</div>`}return r}
+function wxScreen(L){const n=DATA.now,pg=S.page,dots=`<span class="dots"><i class="${pg===0?'on':''}"></i><i class="${pg===1?'on':''}"></i></span>`;
+  const hdr=`<div class="hdr"><span class="chip" data-act="back" data-zone="закрыть">✕ Назад</span><span class="ttl">${PLACE.name} · ${pg?'7 дней':'сегодня'}</span>${dots}</div>`;
+  const foot=`<div class="foot"><span>обн. 18:55 · Open-Meteo.com (CC BY 4.0)</span><span>${pg?'← сегодня':'7 дней →'}</span></div>`;
+  const cur=`<div class="cur">${ico(n.code,n.day,58)}<span class="t">${deg(n.t)}</span><span class="c" style="font-size:22px;font-weight:700;line-height:1.2">${desc(n.code)}<small style="display:block;font-size:16px;font-weight:500">ощущ. ${deg(n.f)}</small></span>${L?'':`<span class="rg">мин ${deg(DATA.d.min[0])}<br>макс ${deg(DATA.d.max[0])}</span>`}</div>${L?`<div class="dl" style="text-align:left">мин ${deg(DATA.d.min[0])} · макс ${deg(DATA.d.max[0])}</div>`:''}`;
+  const cap='<div class="gcap"><span>▬ температура</span><span>▮ вероятность осадков</span><span>▒ ночь</span></div>';
+  if(!L)return sbar+hdr+(pg?`<div class="wk">${weekRows(false)}</div><div class="mut" style="font-size:14px;margin-top:8px">Шкала — общая для недели: ${deg(Math.min(...DATA.d.min))} … ${deg(Math.max(...DATA.d.max))}</div>`
+   :cur+graph(432,178)+cap+`<div class="tbl">${hourRows()}</div>`)+foot.replace('class="foot"','class="foot" style="position:absolute;left:24px;right:24px;bottom:10px"');
+  return LW(hdr+(pg?`<div class="wk">${weekRows(true)}</div>`
+   :`<div style="display:flex;gap:22px"><div style="width:330px">${cur}<div style="font-size:16px;margin-top:6px">${sunLines(NOW).replace(/class="dl"/g,'class="dl" style="text-align:left"')}</div>${cap}</div><div style="flex:1">${graph(400,112)}<div class="tbl">${hourRows()}</div></div></div>`)+foot.replace('class="foot"','class="foot" style="position:absolute;left:24px;right:24px;bottom:8px"'))}
+/* ---------- День ---------- */
+function dayScreen(L){const d=S.date,dt=new Date(d.y,d.m-1,d.d),diff=diffDays(d,NOW),rel=diff===0?'сегодня':diff===1?'завтра':diff===-1?'вчера':diff>0?'через '+diff+' дн.':(-diff)+' дн. назад';
+  const s=sunTimes(d.y,d.m,d.d),sp=(()=>{const q=addDays(d,-1);return s.len-sunTimes(q.y,q.m,q.d).len})(),ma=moonAge(d.y,d.m,d.d),ill=Math.round((1-Math.cos(2*Math.PI*ma/SYN))/2*100);
+  const nf=nextMoon(d,SYN/2),nn=nextMoon(d,0),ds=x=>x?x.d+' '+GN[x.m-1].slice(0,3):'--';
+  const hol=HOL[d.m+'-'+d.d],wi=diff>=0&&diff<7?diff:-1;
+  let curve='<svg width="100%" height="46" viewBox="0 0 365 46" preserveAspectRatio="none"><polyline fill="none" stroke="#151515" stroke-width="2" points="';
+  const ls=[];for(let i=1;i<=365;i+=5){const q=new Date(Date.UTC(d.y,0,i));ls.push(sunTimes(q.getUTCFullYear(),q.getUTCMonth()+1,q.getUTCDate()).len)}
+  const lo=Math.min(...ls),hi=Math.max(...ls);curve+=ls.map((v,i)=>(i*5)+','+(42-(v-lo)/(hi-lo)*38)).join(' ')+`"/><circle cx="${doy(d.y,d.m,d.d)}" cy="${42-(s.len-lo)/(hi-lo)*38}" r="5" fill="#151515"/></svg>`;
+  const title=`<div class="big">${WDF[dt.getDay()]}, ${d.d} ${GN[d.m-1]} ${d.y}<span class="rel">${rel}</span></div><div class="chips">Нед. ${iso(d.y,d.m,d.d)} · День ${doy(d.y,d.m,d.d)} / ${dim(d.y,2)===29?366:365} · осталось ${(dim(d.y,2)===29?366:365)-doy(d.y,d.m,d.d)} дн.</div>${hol?`<div class="hol">★ ${hol}</div>`:''}`;
+  const sun=`<div class="card"><h4>Солнце · ${PLACE.name}</h4><div class="v">↑ ${hm(s.rise)} &nbsp; ↓ ${hm(s.set)}</div><div class="m">Длина дня ${Math.floor(s.len/60)} ч ${p2(s.len%60)} мин · ${sp>=0?'+':'−'}${Math.abs(sp)} мин к вчера</div>${curve}</div>`;
+  const moon=`<div class="card"><h4>Луна</h4><div style="display:flex;gap:12px;align-items:center">${moonSvg(ma,52)}<div><div class="v">${moonName(ma)}</div><div class="m">освещена на ${ill} % · ${Math.floor(ma)}-й лунный день</div></div></div><div class="m" style="margin-top:4px">Полнолуние ${ds(nf)} · новолуние ${ds(nn)}</div></div>`;
+  const wx=wi>=0?`<div class="card" data-act="wxweek" data-zone="тап → 7 дней"><h4>Погода · ${PLACE.name}</h4><div style="display:flex;gap:12px;align-items:center">${ico(DATA.d.c[wi],1,46)}<div><div class="v">${deg(DATA.d.min[wi])} … ${deg(DATA.d.max[wi])} · ${desc(DATA.d.c[wi])}</div><div class="m">осадки ${fmt(DATA.d.mm[wi],1)} мм (${DATA.d.p[wi]} %) · ветер до ${fmt(DATA.d.w[wi],0)} м/с</div></div></div></div>`
+   :`<div class="card"><h4>Погода</h4><div class="m">Прогноз доступен на 7 дней вперёд — с ${NOW.d} по ${addDays(NOW,6).d} ${GN[addDays(NOW,6).m-1]}.</div></div>`;
+  const hdr=`<div class="hdr"><span class="chip" data-act="back" data-zone="закрыть">✕ Назад</span><span class="ttl">День</span><span class="chip ${diff?'':'fill'}" data-act="today" data-zone="сегодня">Сегодня</span></div>`;
+  const nav=`<div class="nav"><span class="chip" data-act="dshift:-1" data-zone="−1 день">‹ ${WDS[(dt.getDay()+6)%7]}</span><span class="chip" data-act="dshift:1" data-zone="+1 день">${WDS[(dt.getDay()+1)%7]} ›</span></div>`;
+  return L?LW(hdr+`<div style="display:flex;gap:22px"><div style="width:330px">${title}${sun}</div><div style="flex:1">${moon}${wx}</div></div>`+nav.replace('class="nav"','class="nav" style="left:24px;right:24px;width:auto;bottom:10px"'))
+   :sbar+hdr+title+sun+moon+wx+nav}
+/* ---------- Год ---------- */
+function yearScreen(L){const y=S.year;let g='';
+  for(let m=1;m<=12;m++){const lead=dow(y,m,1),n=dim(y,m),cur=y===NOW.y&&m===NOW.m;let c=DH.map((x,i)=>`<i class="h">${x[0]}</i>`).join('');
+    for(let i=0;i<42;i++){const rel=i-lead;if(rel<0||rel>=n){c+='<i class="o">.</i>';continue}c+=`<i class="n ${i%7>4?'w':''} ${cur&&rel+1===NOW.d?'td':''}">${rel+1}</i>`}
+    g+=`<div class="mm ${cur?'mc':''}" data-act="month:${y}-${m}" data-zone="→ месяц"><b>${MN[m-1]}</b><div class="mg">${c}</div></div>`}
+  const hdr=`<div class="hdr"><span class="chip" data-act="back" data-zone="закрыть">✕ Назад</span><span class="ttl">${y}</span><span class="chip ${y===NOW.y?'fill':''}" data-act="thisyear" data-zone="этот год">Сегодня</span></div>`;
+  return L?LW(`${hdr}<div class="yg">${g}</div>`):sbar+hdr+`<div class="yg">${g}</div><div class="mut" style="font-size:14px;text-align:center;margin-top:8px">‹ ▲ / ▼ › — год · тап по месяцу — открыть</div>`}
+/* ---------- рендер ---------- */
+function render(){const f=S.screen==='main'?mainScreen:S.screen==='wx'?wxScreen:S.screen==='day'?dayScreen:yearScreen;
+  document.getElementById('P').innerHTML=f(false);document.getElementById('L').innerHTML=f(true);timer(true)}
+/* ---------- ввод ---------- */
+const B=document.body;let toastT;
+function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>e.classList.remove('on'),1800)}
+function go(scr,extra){Object.assign(S,{screen:scr},extra||{});render()}
+function closeAll(){S.screen='main';render()}
+function shiftMonth(k){const n=addMonths(S.vm.y,S.vm.m,k);if(n.y<1970||n.y>2100)return;S.vm=n;render()}
+function act(a){
+  if(a==='wx')return go('wx',{page:0});
+  if(a==='wxweek')return go('wx',{page:1});
+  if(a==='year')return go('year',{year:S.vm.y});
+  if(a==='back')return closeAll();
+  if(a==='today'){S.date={...NOW};return render()}
+  if(a==='thisyear'){S.year=NOW.y;return render()}
+  if(a.startsWith('day:')){const[y,m,d]=a.slice(4).split('-').map(Number);return go('day',{date:{y,m,d}})}
+  if(a.startsWith('month:')){const[y,m]=a.slice(6).split('-').map(Number);S.vm={y,m};return closeAll()}
+  if(a.startsWith('dshift:')){S.date=addDays(S.date,+a.slice(7));return render()}
+}
+function key(k){lastIn=Date.now();
+  if(S.screen==='main'){
+    if(k==='Up')return shiftMonth(-1);if(k==='Down')return shiftMonth(1);
+    if(k==='Left'||k==='Right')return toast('Смена грани: '+(k==='Left'?'←':'→')+' Sloppy Clock (в прототипе не показана)');
+    if(k==='Back')return toast('Back → выход на главную CrossMux');
+    if(k==='Confirm'){B.classList.toggle('inv');document.getElementById('inv').setAttribute('aria-pressed',B.classList.contains('inv'));return}
+    return}
+  if(k==='Back')return closeAll();
+  if(S.screen==='wx'){if(k==='Right'||k==='Left'){S.page=k==='Right'?1:0;return render()}if(k==='Confirm')return toast('Обновить погоду сейчас (Wi-Fi → запрос)')}
+  if(S.screen==='day'){if(k==='Left')return act('dshift:-1');if(k==='Right')return act('dshift:1');if(k==='Up')return act('dshift:-7');if(k==='Down')return act('dshift:7');if(k==='Confirm')return act('today')}
+  if(S.screen==='year'){const d=(k==='Left'||k==='Up')?-1:(k==='Right'||k==='Down')?1:0;if(d){S.year=Math.max(1970,Math.min(2100,S.year+d));return render()}if(k==='Confirm')return act('thisyear')}
+}
+function swipe(dir){ // dir: 'L' — палец влево (как кнопка Right), 'R' — вправо, 'U' — вверх (как Down), 'D' — вниз (как Up)
+  key({L:'Right',R:'Left',U:'Down',D:'Up'}[dir])}
+function tap(el){lastIn=Date.now();const t=el.closest('[data-act]');
+  if(t)return act(t.dataset.act);
+  if(S.screen==='main'){B.classList.toggle('inv');document.getElementById('inv').setAttribute('aria-pressed',B.classList.contains('inv'))}}
+let lastIn=Date.now(),sx,sy,moved=false;
+document.querySelectorAll('.scr').forEach(sc=>{
+  sc.addEventListener('pointerdown',e=>{sx=e.clientX;sy=e.clientY;moved=false});
+  sc.addEventListener('pointerup',e=>{const dx=e.clientX-sx,dy=e.clientY-sy,k=+sc.parentNode.style.width.replace('px','')/+sc.parentNode.dataset.w||1;
+    if(Math.hypot(dx,dy)>28){moved=true;lastIn=Date.now();Math.abs(dx)>Math.abs(dy)?swipe(dx<0?'L':'R'):swipe(dy<0?'U':'D')}});
+  sc.addEventListener('click',e=>{if(moved){moved=false;return}tap(e.target)})});
+document.querySelectorAll('[data-k]').forEach(b=>b.onclick=()=>key(b.dataset.k));
+addEventListener('keydown',e=>{const m={ArrowLeft:'Left',ArrowRight:'Right',ArrowUp:'Up',ArrowDown:'Down',Enter:'Confirm',Escape:'Back'}[e.key];if(m){e.preventDefault();key(m)}});
+document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{const s=b.dataset.s;if(s==='main')closeAll();else if(s==='wx0')go('wx',{page:0});else if(s==='wx1')go('wx',{page:1});else if(s==='day')go('day',{date:{...NOW}});else go('year',{year:NOW.y})});
+function timer(reset){const e=document.getElementById('tmr');if(reset)lastIn=Date.now();if(S.screen==='main'){e.textContent='';return}const left=60-Math.floor((Date.now()-lastIn)/1000);if(left<=0){closeAll();toast('Автозакрытие: 60 с без ввода');return}e.textContent='автозакрытие через '+left+' с'}
+setInterval(()=>timer(false),1000);
+/* ---------- оболочка (как в прежнем макете) ---------- */
+function fit(){const sw=document.querySelector('.stage').clientWidth-24;document.querySelectorAll('.wrap').forEach(w=>{const W=+w.dataset.w,H=+w.dataset.h,k=Math.min(.72,sw/W);w.firstElementChild.style.transform='scale('+k+')';w.style.width=W*k+'px';w.style.height=H*k+'px'})}
+const bs=document.querySelectorAll('[data-m]');
+bs.forEach(b=>b.onclick=()=>{B.dataset.mode=b.dataset.m;bs.forEach(x=>x.setAttribute('aria-pressed',x===b));fit()});
+const iv=document.getElementById('inv');iv.onclick=()=>iv.setAttribute('aria-pressed',B.classList.toggle('inv'));
+const zn=document.getElementById('zn');zn.onclick=()=>zn.setAttribute('aria-pressed',B.classList.toggle('zones'));
+addEventListener('resize',fit);
+/* начальное состояние из #hash — удобно для скриншотов: #wx0 #wx1 #day #day=2026-5-9 #year #zones */
+(function(){const h=location.hash.slice(1).split('&');h.forEach(x=>{if(x==='zones'){B.classList.add('zones');zn.setAttribute('aria-pressed',true)}else if(x==='wx0')Object.assign(S,{screen:'wx',page:0});else if(x==='wx1')Object.assign(S,{screen:'wx',page:1});else if(x==='year')S.screen='year';else if(x==='inv'){B.classList.add('inv')}
+  else if(x==='p'||x==='l'){B.dataset.mode=x}else if(x.startsWith('day')){S.screen='day';const m=x.match(/=(\d+)-(\d+)-(\d+)/);S.date=m?{y:+m[1],m:+m[2],d:+m[3]}:{...NOW}}else if(x.startsWith('vm=')){const[y,m]=x.slice(3).split('-').map(Number);S.vm={y,m}}})})();
+render();fit();
+</script>
+</body>
+</html>

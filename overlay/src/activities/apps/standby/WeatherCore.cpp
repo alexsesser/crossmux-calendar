@@ -2,6 +2,7 @@
 
 #include <ArduinoJson.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -94,8 +95,11 @@ int buildForecastUrl(double lat, double lon, char* buf, size_t size) {
   return std::snprintf(buf, size,
                        "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
                        "&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,is_day"
-                       "&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max"
-                       "&timezone=auto&forecast_days=1&wind_speed_unit=ms",
+                       "&hourly=temperature_2m,weather_code,precipitation_probability,wind_speed_10m,is_day"
+                       "&forecast_hours=24"
+                       "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,"
+                       "precipitation_probability_max,wind_speed_10m_max&forecast_days=7"
+                       "&timezone=auto&timeformat=unixtime&wind_speed_unit=ms",
                        lat, lon);
 }
 
@@ -165,11 +169,56 @@ bool parseForecast(const char* json, size_t len, uint32_t nowEpoch, Weather& out
   return true;
 }
 
+bool parseForecastDetail(const char* json, size_t len, uint32_t nowEpoch, Forecast& out) {
+  JsonDocument doc;
+  if (deserializeJson(doc, json, len)) return false;
+  Forecast f;
+  f.utcOffsetSec = doc["utc_offset_seconds"] | 0;
+  f.fetchedEpoch = nowEpoch;
+
+  JsonArrayConst ht = doc["hourly"]["time"].as<JsonArrayConst>();
+  const size_t nh = std::min<size_t>(ht.size(), kFcHours);
+  for (size_t i = 0; i < nh; ++i) {
+    FcHour& h = f.h[i];
+    h.ts = ht[i] | 0u;
+    if (h.ts == 0) return false;  // время — ключ строки; без него строка бессмысленна
+    h.temp = numberOrNan(doc["hourly"]["temperature_2m"][i]);
+    h.wind = numberOrNan(doc["hourly"]["wind_speed_10m"][i]);
+    h.code = doc["hourly"]["weather_code"][i].is<int>() ? doc["hourly"]["weather_code"][i].as<int>() : -1;
+    h.prob = doc["hourly"]["precipitation_probability"][i].is<int>()
+                 ? static_cast<int8_t>(doc["hourly"]["precipitation_probability"][i].as<int>())
+                 : -1;
+    h.isDay = (doc["hourly"]["is_day"][i] | 1) != 0;
+  }
+  f.nHours = static_cast<uint8_t>(nh);
+
+  JsonArrayConst dt = doc["daily"]["time"].as<JsonArrayConst>();
+  const size_t nd = std::min<size_t>(dt.size(), kFcDays);
+  for (size_t i = 0; i < nd; ++i) {
+    FcDay& d = f.d[i];
+    d.ts = dt[i] | 0u;
+    if (d.ts == 0) return false;
+    d.tMax = numberOrNan(doc["daily"]["temperature_2m_max"][i]);
+    d.tMin = numberOrNan(doc["daily"]["temperature_2m_min"][i]);
+    d.precipMm = numberOrNan(doc["daily"]["precipitation_sum"][i]);
+    d.windMax = numberOrNan(doc["daily"]["wind_speed_10m_max"][i]);
+    d.code = doc["daily"]["weather_code"][i].is<int>() ? doc["daily"]["weather_code"][i].as<int>() : -1;
+    d.prob = doc["daily"]["precipitation_probability_max"][i].is<int>()
+                 ? static_cast<int8_t>(doc["daily"]["precipitation_probability_max"][i].as<int>())
+                 : -1;
+  }
+  f.nDays = static_cast<uint8_t>(nd);
+  f.valid = nh > 0 || nd > 0;
+  if (!f.valid) return false;
+  out = f;
+  return true;
+}
+
 // ---- Кэш ---------------------------------------------------------------------
 
 std::string serializeCache(const Cache& c) {
   JsonDocument doc;
-  doc["v"] = 1;
+  doc["v"] = 2;
   JsonObject p = doc["place"].to<JsonObject>();
   p["lat"] = c.place.lat;
   p["lon"] = c.place.lon;
@@ -192,6 +241,37 @@ std::string serializeCache(const Cache& c) {
     if (c.weather.code >= 0) w["c"] = c.weather.code;
     w["d"] = c.weather.isDay ? 1 : 0;
     w["at"] = c.weather.fetchedEpoch;
+  }
+  if (c.fc.valid) {
+    JsonObject f = doc["fc"].to<JsonObject>();
+    f["off"] = c.fc.utcOffsetSec;
+    f["at"] = c.fc.fetchedEpoch;
+    JsonObject h = f["h"].to<JsonObject>();
+    JsonArray hts = h["ts"].to<JsonArray>(), ht = h["t"].to<JsonArray>(), hc = h["c"].to<JsonArray>(),
+              hp = h["p"].to<JsonArray>(), hw = h["w"].to<JsonArray>(), hd = h["d"].to<JsonArray>();
+    for (int i = 0; i < c.fc.nHours; ++i) {
+      const FcHour& x = c.fc.h[i];
+      hts.add(x.ts);
+      if (std::isnan(x.temp)) ht.add(nullptr); else ht.add(x.temp);
+      hc.add(x.code);
+      hp.add(x.prob);
+      if (std::isnan(x.wind)) hw.add(nullptr); else hw.add(x.wind);
+      hd.add(x.isDay ? 1 : 0);
+    }
+    JsonObject d = f["d"].to<JsonObject>();
+    JsonArray dts = d["ts"].to<JsonArray>(), dmx = d["max"].to<JsonArray>(), dmn = d["min"].to<JsonArray>(),
+              dmm = d["mm"].to<JsonArray>(), dp = d["p"].to<JsonArray>(), dc = d["c"].to<JsonArray>(),
+              dw = d["w"].to<JsonArray>();
+    for (int i = 0; i < c.fc.nDays; ++i) {
+      const FcDay& x = c.fc.d[i];
+      dts.add(x.ts);
+      if (std::isnan(x.tMax)) dmx.add(nullptr); else dmx.add(x.tMax);
+      if (std::isnan(x.tMin)) dmn.add(nullptr); else dmn.add(x.tMin);
+      if (std::isnan(x.precipMm)) dmm.add(nullptr); else dmm.add(x.precipMm);
+      dp.add(x.prob);
+      dc.add(x.code);
+      if (std::isnan(x.windMax)) dw.add(nullptr); else dw.add(x.windMax);
+    }
   }
   std::string out;
   serializeJson(doc, out);
@@ -230,6 +310,37 @@ bool parseCache(const char* json, size_t len, Cache& out) {
       c.weather.fetchedEpoch = w["at"] | 0u;
       c.weather.valid = true;
     }
+  }
+  JsonVariantConst f = doc["fc"];
+  if (!f.isNull()) {
+    JsonArrayConst hts = f["h"]["ts"].as<JsonArrayConst>();
+    const size_t nh = std::min<size_t>(hts.size(), kFcHours);
+    for (size_t i = 0; i < nh; ++i) {
+      FcHour& x = c.fc.h[i];
+      x.ts = hts[i] | 0u;
+      x.temp = numberOrNan(f["h"]["t"][i]);
+      x.code = f["h"]["c"][i].is<int>() ? f["h"]["c"][i].as<int>() : -1;
+      x.prob = f["h"]["p"][i].is<int>() ? static_cast<int8_t>(f["h"]["p"][i].as<int>()) : -1;
+      x.wind = numberOrNan(f["h"]["w"][i]);
+      x.isDay = (f["h"]["d"][i] | 1) != 0;
+    }
+    JsonArrayConst dts = f["d"]["ts"].as<JsonArrayConst>();
+    const size_t nd = std::min<size_t>(dts.size(), kFcDays);
+    for (size_t i = 0; i < nd; ++i) {
+      FcDay& x = c.fc.d[i];
+      x.ts = dts[i] | 0u;
+      x.tMax = numberOrNan(f["d"]["max"][i]);
+      x.tMin = numberOrNan(f["d"]["min"][i]);
+      x.precipMm = numberOrNan(f["d"]["mm"][i]);
+      x.prob = f["d"]["p"][i].is<int>() ? static_cast<int8_t>(f["d"]["p"][i].as<int>()) : -1;
+      x.code = f["d"]["c"][i].is<int>() ? f["d"]["c"][i].as<int>() : -1;
+      x.windMax = numberOrNan(f["d"]["w"][i]);
+    }
+    c.fc.nHours = static_cast<uint8_t>(nh);
+    c.fc.nDays = static_cast<uint8_t>(nd);
+    c.fc.utcOffsetSec = f["off"] | 0;
+    c.fc.fetchedEpoch = f["at"] | 0u;
+    c.fc.valid = (nh > 0 && c.fc.h[0].ts != 0) || (nd > 0 && c.fc.d[0].ts != 0);
   }
   out = c;
   return true;

@@ -44,9 +44,43 @@ struct Weather {
   uint32_t fetchedEpoch = 0;
 };
 
+// Прогноз для подробных экранов: ближайшие 24 часа и 7 дней (сегодня + 6). Отсутствующие поля — NaN / -1.
+constexpr int kFcHours = 24;
+constexpr int kFcDays = 7;
+
+struct FcHour {
+  uint32_t ts = 0;  // Unix, начало часа
+  float temp = NAN;
+  float wind = NAN;  // м/с
+  int16_t code = -1;
+  int8_t prob = -1;  // вероятность осадков, %
+  bool isDay = true;
+};
+
+struct FcDay {
+  uint32_t ts = 0;  // Unix, начало суток по местному времени места
+  float tMax = NAN;
+  float tMin = NAN;
+  float precipMm = NAN;
+  float windMax = NAN;
+  int16_t code = -1;
+  int8_t prob = -1;
+};
+
+struct Forecast {
+  bool valid = false;  // есть хотя бы один час или день
+  uint8_t nHours = 0;
+  uint8_t nDays = 0;
+  int32_t utcOffsetSec = 0;  // смещение места (для локальных дат и часов)
+  uint32_t fetchedEpoch = 0;
+  FcHour h[kFcHours];
+  FcDay d[kFcDays];
+};
+
 struct Cache {
   Place place;
   Weather weather;
+  Forecast fc;
 };
 
 enum class Icon : uint8_t {
@@ -78,6 +112,10 @@ constexpr uint32_t kExpireSec = calendar_config::kExpireHours * 3600u;
 
 int buildGeoUrl(calendar_core::Lang lang, char* buf, size_t size);
 int buildForecastUrl(double lat, double lon, char* buf, size_t size);
+
+// Разбор почасового и дневного прогноза из того же ответа Open-Meteo (нужен timeformat=unixtime).
+// out меняется только при true.
+bool parseForecastDetail(const char* json, size_t len, uint32_t nowEpoch, Forecast& out);
 
 // ipwhois.app: {"success":true,"city":"..","latitude":..,"longitude":..}. out меняется только при true.
 bool parseGeo(const char* json, size_t len, calendar_core::Lang lang, uint32_t nowEpoch, Place& out);

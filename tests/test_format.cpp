@@ -14,6 +14,11 @@ int main() {
     calendar_core::formatUtcOffset(c.min, b, sizeof(b));
     if (std::strcmp(b, c.want) != 0) { std::printf("FAIL %d -> '%s', ожидалось '%s'\n", c.min, b, c.want); ++fails; }
   }
+  // civilFromDays — обратная к daysFromCivil на всём диапазоне
+  for (int32_t z = -3000; z < 60000; ++z) {
+    int y; unsigned m, d; calendar_core::civilFromDays(z, y, m, d);
+    if (calendar_core::daysFromCivil(y, m, d) != z || m < 1 || m > 12 || d < 1 || d > calendar_core::daysInMonth(y, m)) { std::printf("FAIL civil %d\n", z); ++fails; break; }
+  }
   std::printf("format: ошибок %d\n", fails);
   return fails;
 }

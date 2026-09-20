@@ -16,6 +16,9 @@ unsigned daysInYear(int year);
 // Дней с 1970-01-01 (может быть отрицательным до 1970).
 int32_t daysFromCivil(int year, unsigned month, unsigned day);
 
+// Обратное к daysFromCivil: дни с 1970-01-01 → дата.
+void civilFromDays(int32_t days, int& year, unsigned& month, unsigned& day);
+
 // 0 = понедельник … 6 = воскресенье.
 unsigned weekday(int year, unsigned month, unsigned day);
 

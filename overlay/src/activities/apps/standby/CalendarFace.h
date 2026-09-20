@@ -2,6 +2,9 @@
 
 #include <cstdint>
 
+#include "CalendarDetail.h"
+#include "MappedInputManager.h"
+
 #include "CalendarCore.h"
 #include "StandbyFace.h"
 #include "WeatherClient.h"
@@ -24,6 +27,11 @@ class CalendarFace final : public StandbyFace {
   void onPagePrev() override;  // Up: месяц назад
   void onPageNext() override;  // Down: месяц вперёд
 
+  // Перехват ввода для вложенных экранов (погода, день, год). Вызывается хуком в начале StandbyActivity::loop(),
+  // ДО обработки Back/свайпов активностью. true — событие поглощено, активность его не обрабатывает.
+  // Главный экран: поглощает только тап по тап-зоне (погода, число, название месяца); всё остальное — по-старому.
+  // Вложенный экран: поглощает весь ввод (Back закрывает экран, свайпы листают страницы/дни/годы).
+  static bool handleInput(MappedInputManager& input, bool immersive);
  private:
   struct Snapshot {
     bool valid = false;
@@ -43,11 +51,26 @@ class CalendarFace final : public StandbyFace {
   static bool takeSnapshot(Snapshot& out);
   void shiftMonth(int delta);
 
+  bool onInput(MappedInputManager& input);
+  void applyHit(const cal_detail::Hit& h);
+  void closeDetail();
+  void shiftDay(int days);
+  void shiftYear(int delta);
+  void shiftHalf(int delta);
+  void showMonth(int year, unsigned month);
+  cal_detail::Ctx makeCtx(const cal_draw::Today& t, calendar_core::Lang lang) const;
+
   Snapshot snap_;
   int monthOffset_ = 0;  // относительно текущего месяца
   uint32_t lastNavMs_ = 0;
   unsigned updatesSinceCleanup_ = 0;
 
+
+  cal_detail::State st_;    // какой экран открыт, страница, дата, год
+  cal_detail::HitMap hit_;  // тап-зоны последнего кадра (заполняет render, читает handleInput)
+  uint32_t lastInputMs_ = 0;
+
+  static CalendarFace* active_;  // активная грань — для статического handleInput (RTTI в сборке нет)
 
   WeatherClient weather_;
   GfxRenderer* renderer_ = nullptr;  // запоминаем из render(): Wi-Fi-стеку нужен рендерер (NetworkStartup)

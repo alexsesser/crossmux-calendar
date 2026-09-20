@@ -24,6 +24,19 @@ int32_t daysFromCivil(int y, unsigned m, unsigned d) {
   return era * 146097 + static_cast<int>(doe) - 719468;
 }
 
+void civilFromDays(int32_t z, int& y, unsigned& m, unsigned& d) {
+  z += 719468;
+  const int32_t era = (z >= 0 ? z : z - 146096) / 146097;
+  const unsigned doe = static_cast<unsigned>(z - era * 146097);
+  const unsigned yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  const int yy = static_cast<int>(yoe) + era * 400;
+  const unsigned doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const unsigned mp = (5 * doy + 2) / 153;
+  d = doy - (153 * mp + 2) / 5 + 1;
+  m = mp < 10 ? mp + 3 : mp - 9;
+  y = yy + (m <= 2);
+}
+
 unsigned weekday(int y, unsigned m, unsigned d) {
   // 1970-01-01 — четверг (пн = 0 → чт = 3).
   const int32_t z = daysFromCivil(y, m, d) + 3;

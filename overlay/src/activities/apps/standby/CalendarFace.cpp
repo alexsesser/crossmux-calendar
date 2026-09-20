@@ -248,7 +248,7 @@ int drawWeatherBlock(GfxRenderer& r, int x, int y, int w, const weather_core::Ca
                     CL.minutesShort);
       it.add(Glyph::Sunrise, "%s", a);
       it.add(Glyph::Sunset, "%s", b);
-      it.add(Glyph::None, "%s", d);
+      it.add(Glyph::Daylight, "%s", d);
     }
     y += drawRichRows(r, kFontSmall, x + pad / 2, w - pad, y, it, kBold) + 4;
   }

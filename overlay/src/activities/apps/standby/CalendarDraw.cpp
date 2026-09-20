@@ -20,7 +20,8 @@ using weather_core::Icon;
 static_assert(calendar_fonts::kTimePortraitPt == calendar_config::kTimeFontPortraitPt &&
                   calendar_fonts::kTimeLandscapePt == calendar_config::kTimeFontLandscapePt &&
                   calendar_fonts::kTempPt == calendar_config::kTempFontPt &&
-                  calendar_fonts::kDayPt == calendar_config::kDayFontPt,
+                  calendar_fonts::kDayPt == calendar_config::kDayFontPt &&
+                  calendar_fonts::kDayBold == calendar_config::kGridDigitsBold,
               "Размеры шрифта цифр в CalendarConfig.h изменены — запустите ./tools/gen_digit_fonts.sh");
 
 Lang currentLang() {
@@ -288,6 +289,24 @@ void drawGlyph(const GfxRenderer& r, Glyph g, int x, int y, int s) {
       disc(r, cx, ccy, rad, Color::Black);
       break;
     }
+    case Glyph::Daylight: {  // дуга пути солнца над горизонтом: слева восход, справа закат, на вершине — солнце
+      const int w = s * 3 / 2, hy = y + s * 82 / 100, ccx = x + w / 2;
+      const int rad = std::min(w / 2 - 3, hy - y - std::max(3, s / 8) - 1);
+      int px = ccx - rad, py = hy;
+      for (int i = 1; i <= 16; ++i) {
+        const double a = 3.14159265358979 * (1.0 - i / 16.0);
+        const int nx = ccx + static_cast<int>(std::lround(rad * std::cos(a)));
+        const int ny = hy - static_cast<int>(std::lround(rad * std::sin(a)));
+        r.drawLine(px, py, nx, ny, t, true);
+        px = nx;
+        py = ny;
+      }
+      r.drawLine(x, hy, x + w, hy, t, true);
+      disc(r, ccx, hy - rad, std::max(3, s / 7), Color::Black);
+      disc(r, ccx - rad, hy, std::max(2, s / 11), Color::Black);
+      disc(r, ccx + rad, hy, std::max(2, s / 11), Color::Black);
+      break;
+    }
     case Glyph::Sunrise:
       sunOnHorizon(r, x, y, s, true, t);
       break;
@@ -299,16 +318,39 @@ void drawGlyph(const GfxRenderer& r, Glyph g, int x, int y, int s) {
 
 int glyphSize(const GfxRenderer& r, int font) { return r.getLineHeight(font) + 4; }
 
+namespace {
+// Ширина самого значка (без зазора до текста).
+int glyphW(const GfxRenderer& r, int font, Glyph g) {
+  const int s = glyphSize(r, font);
+  switch (g) {
+    case Glyph::None:
+      return 0;
+    case Glyph::TempMin:
+    case Glyph::TempMax:
+      return textW(r, font, "t", kBold) + 1 + s * 6 / 10;
+    case Glyph::Daylight:
+      return s * 3 / 2;
+    default:
+      return s;
+  }
+}
+}  // namespace
+
 int glyphTextW(const GfxRenderer& r, int font, Glyph g, const char* text, EpdFontFamily::Style st) {
-  return (g == Glyph::None ? 0 : glyphSize(r, font) + 4) + textW(r, font, text, st);
+  return (g == Glyph::None ? 0 : glyphW(r, font, g) + 4) + textW(r, font, text, st);
 }
 
 void drawGlyphText(const GfxRenderer& r, int font, Glyph g, int x, int y, const char* text, EpdFontFamily::Style st) {
   const int s = glyphSize(r, font);
-  if (g != Glyph::None) {
+  const int gw = glyphW(r, font, g);
+  if (g == Glyph::TempMin || g == Glyph::TempMax) {
+    const int tw = textW(r, font, "t", kBold), aw = s * 6 / 10;
+    r.drawText(font, x, y + (s - r.getLineHeight(font)) / 2, "t", true, kBold);
+    drawGlyph(r, g, x + tw + 1 - (s - aw) / 2, y, s);  // стрелка стоит по центру квадрата s — сдвигаем в узкую рамку
+  } else if (g != Glyph::None) {
     drawGlyph(r, g, x, y, s);
-    x += s + 4;
   }
+  if (g != Glyph::None) x += gw + 4;
   r.drawText(font, x, y + (s - r.getLineHeight(font)) / 2, text, true, st);
 }
 

@@ -2,7 +2,7 @@
 # Генерирует крупные цифры «как в интерфейсе» (Ubuntu Medium — гарнитура UI_10/UI_12) для времени, температуры и чисел сетки месяца.
 # Во встроенных шрифтах CrossMux нет ничего крупнее 12 pt, поэтому делаем свой: только знаки 0-9 : - ° (крошечный).
 #
-# Размеры (pt) берутся из overlay/.../CalendarConfig.h (kTimeFontPortraitPt, kTimeFontLandscapePt, kTempFontPt, kDayFontPt).
+# Размеры (pt) берутся из overlay/.../CalendarConfig.h (kTimeFontPortraitPt, kTimeFontLandscapePt, kTempFontPt, kDayFontPt, kGridDigitsBold).
 # Метрики (высота цифры, отступ) считаются здесь же и пишутся в CalendarFontMetrics.h (namespace calendar_fonts;
 # лёгкий файл, его можно включать откуда угодно; сами данные шрифта — CalendarFonts.h, включается ровно в одном месте),
 # поэтому после смены размера достаточно запустить скрипт и собрать — руками ничего править не нужно.
@@ -28,23 +28,29 @@ cfg() {  # cfg <имя константы> — целое из CalendarConfig.h
   [ -n "$v" ] || { echo "нет $1 в $CFG" >&2; exit 1; }
   echo "$v"
 }
-PT_XL="$(cfg kTimeFontPortraitPt)"; PT_L="$(cfg kTimeFontLandscapePt)"; PT_TEMP="$(cfg kTempFontPt)"; PT_DAY="$(cfg kDayFontPt)"
+cfgb() {  # cfgb <имя константы> — bool из CalendarConfig.h: 1 или 0
+  local v; v="$(sed -n "s/^[[:space:]]*constexpr bool $1[[:space:]]*=[[:space:]]*\(true\|false\);.*/\1/p" "$CFG")"
+  [ -n "$v" ] || { echo "нет $1 в $CFG" >&2; exit 1; }
+  [ "$v" = true ] && echo 1 || echo 0
+}
+PT_XL="$(cfg kTimeFontPortraitPt)"; PT_L="$(cfg kTimeFontLandscapePt)"; PT_TEMP="$(cfg kTempFontPt)"; PT_DAY="$(cfg kDayFontPt)"; DAY_BOLD="$(cfgb kGridDigitsBold)"
+TTF_DAY="../builtinFonts/source/Ubuntu/Ubuntu-$([ "$DAY_BOLD" = 1 ] && echo Medium || echo Regular).ttf"
 
 {
-  echo "// Сгенерировано tools/gen_digit_fonts.sh (Ubuntu Medium; время: $CHARS_TIME, температура: $CHARS_TEMP, сетка: $CHARS_DAY). Не править руками."
+  echo "// Сгенерировано tools/gen_digit_fonts.sh (Ubuntu Medium; время: $CHARS_TIME, температура: $CHARS_TEMP, сетка: $CHARS_DAY, начертание сетки — по kGridDigitsBold). Не править руками."
   echo "// Гарнитура Ubuntu — Ubuntu Font Licence 1.0 (см. work/lib/EpdFont/builtinFonts/source/Ubuntu/UFL.txt)."
   echo "#pragma once"
   cd "$SCRIPTS"
   "$PY" fontconvert.py calendar_time_xl "$PT_XL" "$TTF" --characters "$CHARS_TIME" 2>/dev/null
   "$PY" fontconvert.py calendar_time_l "$PT_L" "$TTF" --characters "$CHARS_TIME" 2>/dev/null
   "$PY" fontconvert.py calendar_temp "$PT_TEMP" "$TTF" --characters "$CHARS_TEMP" 2>/dev/null
-  "$PY" fontconvert.py calendar_day "$PT_DAY" "$TTF" --characters "$CHARS_DAY" 2>/dev/null
+  "$PY" fontconvert.py calendar_day "$PT_DAY" "$TTF_DAY" --characters "$CHARS_DAY" 2>/dev/null
 } > "$OUT"
 
 # Метрики из самих данных шрифта: высота цифры «0» над базовой линией и отступ от верха строки до верха цифры.
-python3 - "$OUT" "$MET" "$PT_XL" "$PT_L" "$PT_TEMP" "$PT_DAY" <<'PY'
+python3 - "$OUT" "$MET" "$PT_XL" "$PT_L" "$PT_TEMP" "$PT_DAY" "$DAY_BOLD" <<'PY'
 import re, sys
-path, met, pt_xl, pt_l, pt_t, pt_d = sys.argv[1], sys.argv[2], *map(int, sys.argv[3:7])
+path, met, pt_xl, pt_l, pt_t, pt_d, day_bold = sys.argv[1], sys.argv[2], *map(int, sys.argv[3:8])
 s = open(path, encoding="utf-8").read()
 
 def metrics(name):
@@ -64,6 +70,7 @@ constexpr int kTimePortraitPt = {pt_xl};
 constexpr int kTimeLandscapePt = {pt_l};
 constexpr int kTempPt = {pt_t};
 constexpr int kDayPt = {pt_d};
+constexpr bool kDayBold = {"true" if day_bold else "false"};
 constexpr int kTimeXlDigitH = {xl[0]}, kTimeXlTopOffset = {xl[1]};
 constexpr int kTimeLDigitH = {l[0]}, kTimeLTopOffset = {l[1]};
 constexpr int kTempDigitH = {t[0]}, kTempTopOffset = {t[1]};

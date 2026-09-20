@@ -14,4 +14,4 @@
   `update.sh` (проверка нового upstream; пишет upstream.lock только при зелёной сборке)
 - `tests/run.sh` — host-тесты CalendarCore/SunTimes (нужен g++ и python3; для сверки солнца — `astral`)
 - Шрифты: см. CONCEPT §4.6 — во встроенных `NOTOSANS_*` кириллицы нет, текст только `UI_10/UI_12`
-- `tools/gen_digit_fonts.sh` — генератор шрифта крупных цифр (Ubuntu Medium); `docs/` — скриншоты для README
+- `tools/gen_digit_fonts.sh` — генератор шрифтов цифр (время/температура — Ubuntu Medium, числа сетки — Regular/Medium по `kGridDigitsBold`); `docs/` — скриншоты для README

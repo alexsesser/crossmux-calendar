@@ -7,6 +7,7 @@ constexpr int kTimePortraitPt = 70;
 constexpr int kTimeLandscapePt = 50;
 constexpr int kTempPt = 25;
 constexpr int kDayPt = 17;
+constexpr bool kDayBold = false;
 constexpr int kTimeXlDigitH = 104, kTimeXlTopOffset = 32;
 constexpr int kTimeLDigitH = 74, kTimeLTopOffset = 24;
 constexpr int kTempDigitH = 37, kTempTopOffset = 12;

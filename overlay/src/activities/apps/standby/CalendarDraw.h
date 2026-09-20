@@ -101,8 +101,9 @@ void disc(const GfxRenderer& r, int cx, int cy, int rad, Color c);
 constexpr int kMaxItems = 6;
 
 // ---- Значки вместо слов (мин / макс / ветер / осадки / восход / закат): читаются издалека и не отнимают ширину ----
-enum class Glyph : uint8_t { None, TempMin, TempMax, Wind, Drop, Sunrise, Sunset };
-// Значок в квадрате s×s с левым верхним углом (x, y).
+// TempMin/TempMax рисуются как «t↓» / «t↑» (буква t — температура), Daylight — дуга солнца от восхода (слева) к закату (справа).
+enum class Glyph : uint8_t { None, TempMin, TempMax, Wind, Drop, Sunrise, Sunset, Daylight };
+// Значок (кроме «t↓/t↑», их рисует drawGlyphText) в прямоугольнике высотой s с левым верхним углом (x, y); Daylight шире (1,5 s).
 void drawGlyph(const GfxRenderer& r, Glyph g, int x, int y, int s);
 // Сторона значка для шрифта: чуть выше строки текста.
 int glyphSize(const GfxRenderer& r, int font);

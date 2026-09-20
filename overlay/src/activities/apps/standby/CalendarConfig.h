@@ -106,5 +106,7 @@ constexpr int kTimeFontLandscapePt = 50;
 constexpr int kTempFontPt = 25;
 // Числа в сетке месяца (только цифры). Крупнее стандартного 12 pt интерфейса — сетка читается издалека.
 constexpr int kDayFontPt = 17;
+// ⚠ Числа текущего месяца в сетке: true — жирнее (Ubuntu Medium), false — обычные (Ubuntu Regular). Читает генератор шрифта.
+constexpr bool kGridDigitsBold = false;
 
 }  // namespace calendar_config

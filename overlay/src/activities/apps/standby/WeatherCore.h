@@ -92,10 +92,6 @@ Icon iconFor(int code, bool isDay);
 const char* description(calendar_core::Lang lang, int code);
 
 struct Labels {
-  const char* min;
-  const char* max;
-  const char* wind;
-  const char* precip;
   const char* feels;
   const char* updated;      // «обн.»
   const char* stale;        // «устарело»

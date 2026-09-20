@@ -19,7 +19,8 @@ using weather_core::Icon;
 // Размеры шрифта цифр в CalendarConfig.h изменены, а шрифт не перегенерирован — сборка останавливается здесь.
 static_assert(calendar_fonts::kTimePortraitPt == calendar_config::kTimeFontPortraitPt &&
                   calendar_fonts::kTimeLandscapePt == calendar_config::kTimeFontLandscapePt &&
-                  calendar_fonts::kTempPt == calendar_config::kTempFontPt,
+                  calendar_fonts::kTempPt == calendar_config::kTempFontPt &&
+                  calendar_fonts::kDayPt == calendar_config::kDayFontPt,
               "Размеры шрифта цифр в CalendarConfig.h изменены — запустите ./tools/gen_digit_fonts.sh");
 
 Lang currentLang() {
@@ -59,11 +60,12 @@ void abbrTo(char* out, size_t outSize, const char* s, int n) {
 void ensureDigitFonts(GfxRenderer& r) {
   static bool done = false;
   if (done) return;
-  static EpdFont xl(&calendar_time_xl), l(&calendar_time_l), tmp(&calendar_temp);
-  static EpdFontFamily fxl(&xl), fl(&l), ft(&tmp);
+  static EpdFont xl(&calendar_time_xl), l(&calendar_time_l), tmp(&calendar_temp), day(&calendar_day);
+  static EpdFontFamily fxl(&xl), fl(&l), ft(&tmp), fd(&day);
   r.insertFont(kFontTimeXl, fxl);
   r.insertFont(kFontTimeL, fl);
   r.insertFont(kFontTemp, ft);
+  r.insertFont(kFontDay, fd);
   done = true;
 }
 
@@ -224,34 +226,119 @@ void drawWeatherIcon(const GfxRenderer& r, Icon icon, int x, int y, int s) {
 }
 
 // ---------------------------------------------------------------------------
-// Строки-«чипы»: набор коротких фрагментов, переносимый по ширине, центрированный. Возвращает высоту.
+// Значки вместо слов. Рисуются примитивами в квадрате s×s; толщина линий зависит от размера.
 // ---------------------------------------------------------------------------
+namespace {
 
-int drawItemRows(const GfxRenderer& r, int font, int x, int w, int y, const Items& it) {
-  const int lh = r.getLineHeight(font);
-  static constexpr const char* kSep = "  \xC2\xB7  ";
-  char line[160];
-  int used = 0, lines = 0;
-  auto flush = [&]() {
-    if (!used) return;
-    drawCentered(r, font, x, w, y + lines * lh, line);
-    ++lines;
-    used = 0;
-    line[0] = '\0';
-  };
-  line[0] = '\0';
-  for (int i = 0; i < it.n; ++i) {
-    char cand[160];
-    std::snprintf(cand, sizeof(cand), "%s%s%s", line, used ? kSep : "", it.s[i]);
-    if (used && textW(r, font, cand) > w) {
-      flush();
-      std::snprintf(cand, sizeof(cand), "%s", it.s[i]);
-    }
-    std::snprintf(line, sizeof(line), "%s", cand);
-    used = 1;
+void arrowV(const GfxRenderer& r, int cx, int y0, int y1, int head, int t) {  // стрелка от y0 к y1 (острие в y1)
+  const int dir = y1 >= y0 ? -1 : 1;                                         // куда «назад» от острия
+  r.drawLine(cx, y0, cx, y1, t, true);
+  r.drawLine(cx, y1, cx - head, y1 + dir * head, t, true);
+  r.drawLine(cx, y1, cx + head, y1 + dir * head, t, true);
+}
+
+// Полусолнце над горизонтом со стрелкой под ним: вверх — восход, вниз — закат.
+void sunOnHorizon(const GfxRenderer& r, int x, int y, int s, bool rising, int t) {
+  const int cx = x + s / 2, hy = y + s * 56 / 100, rad = std::max(3, s * 20 / 100);
+  static constexpr int kDx[5] = {-10, -7, 0, 7, 10};
+  static constexpr int kDy[5] = {0, -7, -10, -7, 0};
+  for (int i = 0; i < 5; ++i) {
+    const int a = rad + std::max(2, s * 6 / 100), b = a + std::max(2, s * 10 / 100);
+    r.drawLine(cx + kDx[i] * a / 10, hy + kDy[i] * a / 10, cx + kDx[i] * b / 10, hy + kDy[i] * b / 10, t, true);
   }
-  flush();
-  return lines * lh;
+  disc(r, cx, hy, rad, Color::Black);
+  r.fillRect(x, hy + 1, s, s - (hy - y) - 1, false);  // нижняя половина диска — под горизонт
+  r.drawLine(x + s * 4 / 100, hy, x + s * 96 / 100, hy, t, true);
+  const int head = std::max(2, s * 12 / 100);
+  if (rising) {
+    arrowV(r, cx, y + s * 97 / 100, y + s * 68 / 100, head, t);
+  } else {
+    arrowV(r, cx, y + s * 68 / 100, y + s * 97 / 100, head, t);
+  }
+}
+
+}  // namespace
+
+void drawGlyph(const GfxRenderer& r, Glyph g, int x, int y, int s) {
+  const int t = std::max(2, s / 10), cx = x + s / 2;
+  switch (g) {
+    case Glyph::None:
+      break;
+    case Glyph::TempMin:  // ↓
+      arrowV(r, cx, y + s * 10 / 100, y + s * 92 / 100, s * 28 / 100, t + 1);
+      break;
+    case Glyph::TempMax:  // ↑
+      arrowV(r, cx, y + s * 92 / 100, y + s * 10 / 100, s * 28 / 100, t + 1);
+      break;
+    case Glyph::Wind: {  // три порыва разной длины с завитками на концах
+      const int ya = y + s * 28 / 100, yb = y + s * 52 / 100, yc = y + s * 76 / 100;
+      r.drawLine(x + s * 6 / 100, ya, x + s * 70 / 100, ya, t, true);
+      r.drawLine(x + s * 70 / 100, ya, x + s * 84 / 100, ya - s * 10 / 100, t, true);
+      r.drawLine(x + s * 6 / 100, yb, x + s * 92 / 100, yb, t, true);
+      r.drawLine(x + s * 6 / 100, yc, x + s * 56 / 100, yc, t, true);
+      r.drawLine(x + s * 56 / 100, yc, x + s * 68 / 100, yc + s * 10 / 100, t, true);
+      break;
+    }
+    case Glyph::Drop: {  // капля: острие сверху + круг
+      const int apex = y + s * 4 / 100, ccy = y + s * 66 / 100, rad = s * 28 / 100;
+      for (int yy = apex; yy <= ccy; ++yy) {
+        const int hw = (yy - apex) * rad / std::max(1, ccy - apex);
+        r.fillRect(cx - hw, yy, 2 * hw + 1, 1, true);
+      }
+      disc(r, cx, ccy, rad, Color::Black);
+      break;
+    }
+    case Glyph::Sunrise:
+      sunOnHorizon(r, x, y, s, true, t);
+      break;
+    case Glyph::Sunset:
+      sunOnHorizon(r, x, y, s, false, t);
+      break;
+  }
+}
+
+int glyphSize(const GfxRenderer& r, int font) { return r.getLineHeight(font) + 4; }
+
+int glyphTextW(const GfxRenderer& r, int font, Glyph g, const char* text, EpdFontFamily::Style st) {
+  return (g == Glyph::None ? 0 : glyphSize(r, font) + 4) + textW(r, font, text, st);
+}
+
+void drawGlyphText(const GfxRenderer& r, int font, Glyph g, int x, int y, const char* text, EpdFontFamily::Style st) {
+  const int s = glyphSize(r, font);
+  if (g != Glyph::None) {
+    drawGlyph(r, g, x, y, s);
+    x += s + 4;
+  }
+  r.drawText(font, x, y + (s - r.getLineHeight(font)) / 2, text, true, st);
+}
+
+int drawRichRows(const GfxRenderer& r, int font, int x, int w, int y, const RichItems& items, EpdFontFamily::Style st,
+                 bool center) {
+  constexpr int kGap = 14;  // между элементами одной строки
+  const int rowH = glyphSize(r, font);
+  int rows = 0, from = 0;
+  auto flush = [&](int to) {  // [from, to) — одна строка
+    int total = -kGap;
+    for (int i = from; i < to; ++i) total += kGap + glyphTextW(r, font, items.it[i].g, items.it[i].s, st);
+    int cx = center ? x + (w - total) / 2 : x;
+    for (int i = from; i < to; ++i) {
+      drawGlyphText(r, font, items.it[i].g, cx, y + rows * rowH, items.it[i].s, st);
+      cx += glyphTextW(r, font, items.it[i].g, items.it[i].s, st) + kGap;
+    }
+    ++rows;
+    from = to;
+  };
+  int cur = -kGap;
+  for (int i = 0; i < items.n; ++i) {
+    const int iw = glyphTextW(r, font, items.it[i].g, items.it[i].s, st);
+    if (i > from && cur + kGap + iw > w) {
+      flush(i);
+      cur = -kGap;
+    }
+    cur += kGap + iw;
+  }
+  if (items.n > from) flush(items.n);
+  return rows * rowH;
 }
 
 // «17°» / «--» без знака «плюс».

@@ -92,7 +92,7 @@ constexpr int kLandscapePad = 14;
 // Ширина левой колонки в ландшафте, % от ширины экрана. Остальное — сетка месяца.
 constexpr int kLandscapeLeftPct = 41;
 // Высота строки сетки месяца: не больше / не меньше. Реальная считается по свободному месту.
-constexpr int kMaxRowH = 68;
+constexpr int kMaxRowH = 80;
 constexpr int kMinRowH = 34;
 // Отступ сверху и снизу под оверлей активности (заголовок, батарея, точки-пейджер). Менять осторожно:
 // значения должны оставлять место элементам, которые рисует StandbyActivity.
@@ -104,5 +104,7 @@ constexpr int kBottomReserve = 44;
 constexpr int kTimeFontPortraitPt = 70;
 constexpr int kTimeFontLandscapePt = 50;
 constexpr int kTempFontPt = 25;
+// Числа в сетке месяца (только цифры). Крупнее стандартного 12 pt интерфейса — сетка читается издалека.
+constexpr int kDayFontPt = 17;
 
 }  // namespace calendar_config

@@ -130,10 +130,10 @@ void buildMonthGrid(int year, unsigned month, MonthGrid& out) {
 
 namespace {
 
-const Labels kLabelsEn = {"Wk", "Day", "Sunrise", "Sunset", "Daylight", "h", "m", "Polar day", "Polar night", "No clock"};
-const Labels kLabelsRu = {"Нед.", "День", "Восход", "Закат", "Длина дня", "ч", "мин", "Полярный день", "Полярная ночь",
+const Labels kLabelsEn = {"Wk", "Day", "h", "m", "Polar day", "Polar night", "No clock"};
+const Labels kLabelsRu = {"Нед.", "День", "ч", "мин", "Полярный день", "Полярная ночь",
                           "Время не задано"};
-const Labels kLabelsDe = {"KW", "Tag", "Sonnenaufg.", "Sonnenunterg.", "Tageslicht", "Std", "Min", "Polartag",
+const Labels kLabelsDe = {"KW", "Tag", "Std", "Min", "Polartag",
                           "Polarnacht", "Keine Uhrzeit"};
 
 const char* const kWeekdayEn[7] = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};

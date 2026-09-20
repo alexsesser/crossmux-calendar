@@ -34,6 +34,9 @@ constexpr const char* kDash = "--";
 constexpr int kFontTimeXl = 0x43414C58;  // время, портрет
 constexpr int kFontTimeL = 0x43414C4C;   // время, ландшафт
 constexpr int kFontTemp = 0x43414C54;    // температура
+constexpr int kFontDay = 0x43414C44;     // числа в сетке месяца
+using calendar_fonts::kDayDigitH;
+using calendar_fonts::kDayTopOffset;
 using calendar_fonts::kTempDigitH;
 using calendar_fonts::kTempTopOffset;
 using calendar_fonts::kTimeLDigitH;
@@ -94,16 +97,37 @@ void drawMoonPhase(const GfxRenderer& r, double fraction, int cx, int cy, int ra
 // Залитый круг.
 void disc(const GfxRenderer& r, int cx, int cy, int rad, Color c);
 
-// Строки-«чипы»: короткие фрагменты, переносятся по ширине, центрируются. Возвращает высоту.
+// Максимум элементов в строке значков (RichItems).
 constexpr int kMaxItems = 6;
-struct Items {
-  char s[kMaxItems][44];
+
+// ---- Значки вместо слов (мин / макс / ветер / осадки / восход / закат): читаются издалека и не отнимают ширину ----
+enum class Glyph : uint8_t { None, TempMin, TempMax, Wind, Drop, Sunrise, Sunset };
+// Значок в квадрате s×s с левым верхним углом (x, y).
+void drawGlyph(const GfxRenderer& r, Glyph g, int x, int y, int s);
+// Сторона значка для шрифта: чуть выше строки текста.
+int glyphSize(const GfxRenderer& r, int font);
+// Значок + текст справа от него; ширина такого элемента и его отрисовка (y — верх строки значка).
+int glyphTextW(const GfxRenderer& r, int font, Glyph g, const char* text, EpdFontFamily::Style st = kRegular);
+void drawGlyphText(const GfxRenderer& r, int font, Glyph g, int x, int y, const char* text, EpdFontFamily::Style st = kRegular);
+
+// Строка из элементов «значок + текст» (значок необязателен), переносится по ширине. Возвращает высоту.
+struct RichItems {
+  struct It {
+    Glyph g;
+    char s[36];
+  } it[kMaxItems];
   int n = 0;
-  void add(const char* fmt, const char* a = "", const char* b = "", const char* c = "") {
-    if (n < kMaxItems) std::snprintf(s[n++], sizeof(s[0]), fmt, a, b, c);
+  void add(Glyph g, const char* fmt, const char* a = "", const char* b = "", const char* c = "") {
+    if (n < kMaxItems) {
+      it[n].g = g;
+      std::snprintf(it[n].s, sizeof(it[0].s), fmt, a, b, c);
+      ++n;
+    }
   }
 };
-int drawItemRows(const GfxRenderer& r, int font, int x, int w, int y, const Items& it);
+// center — по центру [x, x+w); иначе прижато к x.
+int drawRichRows(const GfxRenderer& r, int font, int x, int w, int y, const RichItems& items,
+                 EpdFontFamily::Style st = kRegular, bool center = true);
 
 // «17°» / «--»; «0,4» (ru/de) или «0.4» (en) миллиметры.
 void fmtDeg(char* out, size_t n, float v);

@@ -198,65 +198,59 @@ int drawWeatherBlock(GfxRenderer& r, int x, int y, int w, const weather_core::Ca
     y += iconS + 6;
   }
 
-  // Строка 3: диапазон, ветер, осадки.
+  // Строка 3: диапазон (↓ ↑), ветер, осадки — значками вместо слов.
   {
-    Items it;
-    char a[16], b[16], wind[16], mm[16];
+    RichItems it;
+    char a[16], b[16], wind[24], pr[40], mm[16];
     if (compact) {
-      char fd[16];
+      char fd[16], feels[32];
       fmtDeg(fd, sizeof(fd), w0.feels);
-      it.add("%s %s", WL.feels, fd);
+      std::snprintf(feels, sizeof(feels), "%s %s", WL.feels, fd);
+      it.add(Glyph::None, "%s", feels);
     }
     fmtDeg(a, sizeof(a), w0.tMin);
     fmtDeg(b, sizeof(b), w0.tMax);
-    it.add("%s %s", WL.min, a);
-    it.add("%s %s", WL.max, b);
+    it.add(Glyph::TempMin, "%s", a);
+    it.add(Glyph::TempMax, "%s", b);
     if (std::isnan(w0.windMs)) {
       std::snprintf(wind, sizeof(wind), "%s", kDash);
     } else {
-      std::snprintf(wind, sizeof(wind), "%ld", std::lround(w0.windMs));
+      std::snprintf(wind, sizeof(wind), "%ld %s", std::lround(w0.windMs), WL.windUnit);
     }
-    char windTxt[40];
-    if (std::isnan(w0.windMs)) {
-      std::snprintf(windTxt, sizeof(windTxt), "%s %s", WL.wind, wind);
-    } else {
-      std::snprintf(windTxt, sizeof(windTxt), "%s %s %s", WL.wind, wind, WL.windUnit);
-    }
-    it.add("%s", windTxt);
+    it.add(Glyph::Wind, "%s", wind);
     fmtMm(mm, sizeof(mm), w0.precipMm, lang);
-    char pr[48];
-    if (w0.precipProb >= 0 && !std::isnan(w0.precipMm)) {
-      std::snprintf(pr, sizeof(pr), "%s %s %s (%d %%)", WL.precip, mm, WL.mmUnit, w0.precipProb);
-    } else if (std::isnan(w0.precipMm)) {
-      std::snprintf(pr, sizeof(pr), "%s %s", WL.precip, mm);
+    if (std::isnan(w0.precipMm)) {
+      std::snprintf(pr, sizeof(pr), "%s", mm);
+    } else if (w0.precipProb >= 0) {
+      std::snprintf(pr, sizeof(pr), "%s %s (%d %%)", mm, WL.mmUnit, w0.precipProb);
     } else {
-      std::snprintf(pr, sizeof(pr), "%s %s %s", WL.precip, mm, WL.mmUnit);
+      std::snprintf(pr, sizeof(pr), "%s %s", mm, WL.mmUnit);
     }
-    it.add("%s", pr);
-    y += drawItemRows(r, kFontSmall, x + pad, inner, y, it) + 4;
+    it.add(Glyph::Drop, "%s", pr);
+    y += drawRichRows(r, kFontSmall, x + pad / 2, w - pad, y, it, kBold) + 2;
   }
 
   // Строка 4: солнце — считается офлайн по месту, работает и без сети.
   {
     const auto& CL = calendar_core::labels(lang);
     const auto sun = sun_times::compute(t.year, t.month, t.day, c.place.lat, c.place.lon, t.utcOffsetMin);
-    Items it;
+    RichItems it;
     if (!sun.valid) {
-      it.add("%s %s", CL.sunrise, kDash);
-      it.add("%s %s", CL.sunset, kDash);
+      it.add(Glyph::Sunrise, "%s", kDash);
+      it.add(Glyph::Sunset, "%s", kDash);
     } else if (sun.polarDay || sun.polarNight) {
-      it.add("%s", sun.polarDay ? CL.polarDay : CL.polarNight);
+      it.add(Glyph::None, "%s", sun.polarDay ? CL.polarDay : CL.polarNight);
     } else {
       char a[12], b[12], d[28];
       std::snprintf(a, sizeof(a), "%02d:%02d", sun.sunriseMin / 60, sun.sunriseMin % 60);
       std::snprintf(b, sizeof(b), "%02d:%02d", sun.sunsetMin / 60, sun.sunsetMin % 60);
       std::snprintf(d, sizeof(d), "%d %s %02d %s", sun.daylightMin / 60, CL.hoursShort, sun.daylightMin % 60,
                     CL.minutesShort);
-      it.add("%s %s", CL.sunrise, a);
-      it.add("%s %s", CL.sunset, b);
-      it.add("%s %s", CL.daylight, d);
+      it.add(Glyph::Sunrise, "%s", a);
+      it.add(Glyph::Sunset, "%s", b);
+      it.add(Glyph::None, "%s", d);
     }
-    y += drawItemRows(r, kFontSmall, x + pad, inner, y, it) + 4;
+    y += drawRichRows(r, kFontSmall, x + pad / 2, w - pad, y, it, kBold) + 4;
   }
 
   if (bottomRule) {
@@ -275,6 +269,11 @@ int drawWeatherBlock(GfxRenderer& r, int x, int y, int w, const weather_core::Ca
 // ---------------------------------------------------------------------------
 constexpr int kGridTitleH = 40;
 constexpr int kGridDowH = 30;
+
+// Число дня в ячейке — сгенерированным цифровым шрифтом (крупнее 12 pt интерфейса), по центру ячейки.
+void drawGridNumber(GfxRenderer& r, int cx, int cy, int cw, int rowH, const char* num, bool black) {
+  r.drawText(kFontDay, cx + (cw - textW(r, kFontDay, num)) / 2, cy + (rowH - kDayDigitH) / 2 - kDayTopOffset, num, black);
+}
 
 int gridRowH(int rows, int availH) {
   return std::clamp((availH - kGridTitleH - kGridDowH) / std::max(rows, 1), kMinRowH, kMaxRowH);
@@ -326,16 +325,19 @@ void drawMonthGrid(GfxRenderer& r, int x, int y, int w, int availH, int viewYear
                            cell.day == t.day;
       if (isToday) {
         r.fillRoundedRect(cx + inset, cy + inset, cw - 2 * inset, rowH - 2 * inset, 10, Color::Black);
-        r.drawText(kFontText, cx + (cw - textW(r, kFontText, num, kBold)) / 2,
-                   cy + (rowH - r.getLineHeight(kFontText)) / 2, num, false, kBold);
+        drawGridNumber(r, cx, cy, cw, rowH, num, false);
         continue;
       }
       // Выходные И праздники/переносы (по производственному календарю; нет данных — выходные + фиксированные праздники).
       if (cell.kind == CellKind::CurrentMonth && cal_detail::dayInfo(ctx, cell.year, cell.month, cell.day).off) {
         r.fillRectDither(cx + inset, cy + inset, cw - 2 * inset, rowH - 2 * inset, Color::LightGray);
       }
-      const int f = cell.kind == CellKind::CurrentMonth ? kFontText : kFontSmall;
-      r.drawText(f, cx + (cw - textW(r, f, num)) / 2, cy + (rowH - r.getLineHeight(f)) / 2, num, true);
+      if (cell.kind == CellKind::CurrentMonth) {
+        drawGridNumber(r, cx, cy, cw, rowH, num, true);
+      } else {
+        r.drawText(kFontSmall, cx + (cw - textW(r, kFontSmall, num)) / 2, cy + (rowH - r.getLineHeight(kFontSmall)) / 2,
+                   num, true);
+      }
     }
   }
 }

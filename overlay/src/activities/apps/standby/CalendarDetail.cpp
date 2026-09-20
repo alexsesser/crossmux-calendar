@@ -205,23 +205,23 @@ void fmtUpdatedLine(char* out, size_t n, const Ctx& c, const WxView& v, Lang lan
                 (v.stale || v.expired) ? WL.stale : WL.updated, when);
 }
 
-// Восход/закат/длина дня строкой-чипами (офлайн).
-void sunItems(Items& it, const Ctx& c, int y, unsigned m, unsigned d, bool withLen) {
+// Восход/закат/длина дня строкой из значков (офлайн).
+void sunItems(RichItems& it, const Ctx& c, int y, unsigned m, unsigned d, bool withLen) {
   const auto& CL = calendar_core::labels(c.lang);
   const auto s = sun_times::compute(y, m, d, c.wx.place.lat, c.wx.place.lon, c.t.utcOffsetMin);
   if (!s.valid) {
-    it.add("%s %s", CL.sunrise, kDash);
-    it.add("%s %s", CL.sunset, kDash);
+    it.add(Glyph::Sunrise, "%s", kDash);
+    it.add(Glyph::Sunset, "%s", kDash);
   } else if (s.polarDay || s.polarNight) {
-    it.add("%s", s.polarDay ? CL.polarDay : CL.polarNight);
+    it.add(Glyph::None, "%s", s.polarDay ? CL.polarDay : CL.polarNight);
   } else {
     char a[12], b[12], l[28];
     std::snprintf(a, sizeof(a), "%02d:%02d", s.sunriseMin / 60, s.sunriseMin % 60);
     std::snprintf(b, sizeof(b), "%02d:%02d", s.sunsetMin / 60, s.sunsetMin % 60);
     std::snprintf(l, sizeof(l), "%d %s %02d %s", s.daylightMin / 60, CL.hoursShort, s.daylightMin % 60, CL.minutesShort);
-    it.add("%s %s", CL.sunrise, a);
-    it.add("%s %s", CL.sunset, b);
-    if (withLen) it.add("%s %s", CL.daylight, l);
+    it.add(Glyph::Sunrise, "%s", a);
+    it.add(Glyph::Sunset, "%s", b);
+    if (withLen) it.add(Glyph::None, "%s", l);
   }
 }
 
@@ -252,11 +252,12 @@ int drawCurrent(GfxRenderer& r, int x, int y, int w, const Ctx& c, const WxView&
   char a[16], b[16], ra[40], rb[40];
   fmtDeg(a, sizeof(a), ok ? cur.tMin : NAN);
   fmtDeg(b, sizeof(b), ok ? cur.tMax : NAN);
-  std::snprintf(ra, sizeof(ra), "%s %s", WL.min, a);
-  std::snprintf(rb, sizeof(rb), "%s %s", WL.max, b);
+  std::snprintf(ra, sizeof(ra), "%s", a);
+  std::snprintf(rb, sizeof(rb), "%s", b);
   if (!land) {
-    r.drawText(kFontSmall, x + w - textW(r, kFontSmall, ra, kBold), ty, ra, true, kBold);
-    r.drawText(kFontSmall, x + w - textW(r, kFontSmall, rb, kBold), ty + lineH(r, kFontSmall) + 2, rb, true, kBold);
+    const int rowH = glyphSize(r, kFontSmall) + 2;
+    drawGlyphText(r, kFontSmall, Glyph::TempMin, x + w - glyphTextW(r, kFontSmall, Glyph::TempMin, ra, kBold), ty - 2, ra, kBold);
+    drawGlyphText(r, kFontSmall, Glyph::TempMax, x + w - glyphTextW(r, kFontSmall, Glyph::TempMax, rb, kBold), ty - 2 + rowH, rb, kBold);
   }
   return iconS + 12;
 }
@@ -377,9 +378,9 @@ void drawWeatherToday(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T
   if (!f.land) {
     const int w = f.w - 2 * pad, x = f.x + pad;
     y += drawCurrent(r, x, y, w, c, v, false);
-    Items it;
+    RichItems it;
     sunItems(it, c, c.t.year, c.t.month, c.t.day, true);
-    y += drawItemRows(r, kFontSmall, x, w, y, it) + 4;
+    y += drawRichRows(r, kFontSmall, x, w, y, it, kBold) + 4;
     if (n < 2) {
       drawNoForecast(r, x, y, w, c, T);
       return;
@@ -399,16 +400,16 @@ void drawWeatherToday(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T
   const int leftW = 330 * f.w / 800, gap = 22;
   const int lx = f.x + pad, rx = lx + leftW + gap, rw = f.w - 2 * pad - leftW - gap;
   int ly = y + drawCurrent(r, lx, y, leftW, c, v, true);
-  char a[16], b[16], line[48];
+  char a[16], b[16];
   fmtDeg(a, sizeof(a), v.haveCur ? v.cur.tMin : NAN);
   fmtDeg(b, sizeof(b), v.haveCur ? v.cur.tMax : NAN);
-  const auto& WL = weather_core::labels(c.lang);
-  std::snprintf(line, sizeof(line), "%s %s  \xC2\xB7  %s %s", WL.min, a, WL.max, b);
-  r.drawText(kFontSmall, lx, ly, line, true, kBold);
-  ly += lineH(r, kFontSmall) + 8;
-  Items it;
-  sunItems(it, c, c.t.year, c.t.month, c.t.day, true);
-  ly += drawItemRows(r, kFontSmall, lx, leftW, ly, it) + 6;
+  RichItems it;
+  it.add(Glyph::TempMin, "%s", a);
+  it.add(Glyph::TempMax, "%s", b);
+  ly += drawRichRows(r, kFontSmall, lx, leftW, ly, it, kBold, false) + 6;
+  RichItems sun;
+  sunItems(sun, c, c.t.year, c.t.month, c.t.day, true);
+  ly += drawRichRows(r, kFontSmall, lx, leftW, ly, sun, kBold) + 6;
   if (n < 2) {
     drawNoForecast(r, rx, y, rw, c, T);
     return;
@@ -603,12 +604,15 @@ int drawSunCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T,
   Card k = beginCard(r, x, y, w, cap);
   const auto sun = sun_times::compute(s.dayY, s.dayM, s.dayD, c.wx.place.lat, c.wx.place.lon, c.t.utcOffsetMin);
   char l1[64], l2[96];
+  RichItems l1Items;
   if (!sun.valid || sun.polarDay || sun.polarNight) {
-    std::snprintf(l1, sizeof(l1), "%s", !sun.valid ? kDash : sun.polarDay ? CL.polarDay : CL.polarNight);
+    l1Items.add(Glyph::None, "%s", !sun.valid ? kDash : sun.polarDay ? CL.polarDay : CL.polarNight);
     l2[0] = '\0';
   } else {
-    std::snprintf(l1, sizeof(l1), "%s %02d:%02d  \xC2\xB7  %s %02d:%02d", CL.sunrise, sun.sunriseMin / 60, sun.sunriseMin % 60,
-                  CL.sunset, sun.sunsetMin / 60, sun.sunsetMin % 60);
+    std::snprintf(l1, sizeof(l1), "%02d:%02d", sun.sunriseMin / 60, sun.sunriseMin % 60);
+    l1Items.add(Glyph::Sunrise, "%s", l1);
+    std::snprintf(l1, sizeof(l1), "%02d:%02d", sun.sunsetMin / 60, sun.sunsetMin % 60);
+    l1Items.add(Glyph::Sunset, "%s", l1);
     // Разница с предыдущим днём.
     int py;
     unsigned pm, pd;
@@ -622,8 +626,7 @@ int drawSunCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T,
     std::snprintf(l2, sizeof(l2), "%d %s %02d %s%s%s", sun.daylightMin / 60, CL.hoursShort, sun.daylightMin % 60, CL.minutesShort,
                   delta[0] ? "  \xC2\xB7  " : "", delta);
   }
-  drawCentered(r, kFontText, x, w, k.cy, l1, true, kBold);
-  k.cy += lineH(r, kFontText) + 2;
+  k.cy += drawRichRows(r, kFontText, x, w, k.cy, l1Items, kBold) + 2;
   if (l2[0]) {
     const Fit t2(r, kFontSmall, l2, w - 16);
     drawCentered(r, kFontSmall, x, w, k.cy, t2.c_str());
@@ -710,14 +713,17 @@ int drawWeatherCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt
   const char* desc = d.code >= 0 ? weather_core::description(c.lang, d.code) : WL.noData;
   const Fit dn(r, kFontText, desc, tw, kBold);
   r.drawText(kFontText, tx, k.cy + 2, dn.c_str(), true, kBold);
-  char a[16], b[16], mm[16], line[96];
+  char a[16], b[16], mm[16], pr[24];
   fmtDeg(a, sizeof(a), d.tMin);
   fmtDeg(b, sizeof(b), d.tMax);
   fmtMm(mm, sizeof(mm), d.precipMm, c.lang);
-  std::snprintf(line, sizeof(line), "%s %s  \xC2\xB7  %s %s  \xC2\xB7  %s %s", WL.min, a, WL.max, b, mm, WL.mmUnit);
-  const Fit l(r, kFontSmall, line, tw);
-  r.drawText(kFontSmall, tx, k.cy + 2 + lineH(r, kFontText), l.c_str(), true);
-  k.cy += iconS + 8;
+  std::snprintf(pr, sizeof(pr), "%s %s", mm, WL.mmUnit);
+  RichItems ri;
+  ri.add(Glyph::TempMin, "%s", a);
+  ri.add(Glyph::TempMax, "%s", b);
+  ri.add(Glyph::Drop, "%s", pr);
+  drawRichRows(r, kFontSmall, tx, tw, k.cy + 2 + lineH(r, kFontText), ri, kRegular, false);
+  k.cy += std::max(iconS + 8, lineH(r, kFontText) + glyphSize(r, kFontSmall) + 8);
   const int h = endCard(r, k);
   hit.add(x, y, w, h - 8, Act::OpenWeek);
   return h;

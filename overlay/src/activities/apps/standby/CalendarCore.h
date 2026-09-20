@@ -60,9 +60,6 @@ enum class Lang : uint8_t { En, Ru, De };
 struct Labels {
   const char* week;       // «Нед.»
   const char* day;        // «День»
-  const char* sunrise;    // «Восход»
-  const char* sunset;     // «Закат»
-  const char* daylight;   // «Длина дня»
   const char* hoursShort; // «ч»
   const char* minutesShort;
   const char* polarDay;

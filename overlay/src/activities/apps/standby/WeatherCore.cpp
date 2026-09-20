@@ -60,9 +60,9 @@ const Entry* find(int code) {
   return nullptr;
 }
 
-const Labels kLabelsEn = {"min", "max", "wind", "precip.", "feels", "upd.", "outdated", "No data", "Unknown place", "m/s", "mm"};
-const Labels kLabelsRu = {"мин", "макс", "ветер", "осадки", "ощущ.", "обн.", "устарело", "Нет данных", "Место не определено", "м/с", "мм"};
-const Labels kLabelsDe = {"min", "max", "Wind", "Regen", "gefühlt", "akt.", "veraltet", "Keine Daten", "Ort unbekannt", "m/s", "mm"};
+const Labels kLabelsEn = {"feels", "upd.", "outdated", "No data", "Unknown place", "m/s", "mm"};
+const Labels kLabelsRu = {"ощущ.", "обн.", "устарело", "Нет данных", "Место не определено", "м/с", "мм"};
+const Labels kLabelsDe = {"gefühlt", "akt.", "veraltet", "Keine Daten", "Ort unbekannt", "m/s", "mm"};
 
 }  // namespace
 

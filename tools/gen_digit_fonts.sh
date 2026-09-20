@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Генерирует крупные цифры «как в интерфейсе» (Ubuntu Medium — гарнитура UI_10/UI_12) для времени и температуры.
 # Во встроенных шрифтах CrossMux нет ничего крупнее 12 pt, поэтому делаем свой: только знаки 0-9 : - ° (крошечный).
-# Результат — overlay/.../CalendarFonts.h (в git). Запускать нужно ТОЛЬКО при смене размеров/гарнитуры.
+#
+# Размеры (pt) берутся из overlay/.../CalendarConfig.h (kTimeFontPortraitPt, kTimeFontLandscapePt, kTempFontPt).
+# Метрики (высота цифры, отступ) считаются здесь же и пишутся в конец CalendarFonts.h (namespace calendar_fonts),
+# поэтому после смены размера достаточно запустить скрипт и собрать — руками ничего править не нужно.
+# Забыли запустить — сборка остановится на static_assert в CalendarFace.cpp.
+#
 #   ./tools/gen_digit_fonts.sh
 # Нужно: ../fonts-env (python3 -m venv ../fonts-env && ../fonts-env/bin/pip install freetype-py fonttools) и work/ (sync.sh).
 set -euo pipefail
@@ -9,21 +14,55 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PY="${PY:-$ROOT/../fonts-env/bin/python}"
 SCRIPTS="$ROOT/work/lib/EpdFont/scripts"
 TTF="../builtinFonts/source/Ubuntu/Ubuntu-Medium.ttf"
-OUT="$ROOT/overlay/src/activities/apps/standby/CalendarFonts.h"
+DIR="$ROOT/overlay/src/activities/apps/standby"
+CFG="$DIR/CalendarConfig.h"
+OUT="$DIR/CalendarFonts.h"
 CHARS='0123456789:-°'
 
-# pt @150 dpi (ppem = pt*150/72). Высота цифры ≈ 0.69 ppem.
-SIZE_TIME_XL="${SIZE_TIME_XL:-70}"   # время, портрет  (цифра ≈ 105 px)
-SIZE_TIME_L="${SIZE_TIME_L:-50}"     # время, ландшафт (цифра ≈ 76 px)
-SIZE_TEMP="${SIZE_TEMP:-25}"         # температура     (цифра ≈ 36 px)
+cfg() {  # cfg <имя константы> — целое из CalendarConfig.h
+  local v; v="$(sed -n "s/^[[:space:]]*constexpr int $1[[:space:]]*=[[:space:]]*\([0-9][0-9]*\);.*/\1/p" "$CFG")"
+  [ -n "$v" ] || { echo "нет $1 в $CFG" >&2; exit 1; }
+  echo "$v"
+}
+PT_XL="$(cfg kTimeFontPortraitPt)"; PT_L="$(cfg kTimeFontLandscapePt)"; PT_TEMP="$(cfg kTempFontPt)"
 
 {
   echo "// Сгенерировано tools/gen_digit_fonts.sh (Ubuntu Medium, знаки: $CHARS). Не править руками."
   echo "// Гарнитура Ubuntu — Ubuntu Font Licence 1.0 (см. work/lib/EpdFont/builtinFonts/source/Ubuntu/UFL.txt)."
   echo "#pragma once"
   cd "$SCRIPTS"
-  for spec in "calendar_time_xl:$SIZE_TIME_XL" "calendar_time_l:$SIZE_TIME_L" "calendar_temp:$SIZE_TEMP"; do
-    "$PY" fontconvert.py "${spec%%:*}" "${spec##*:}" "$TTF" --characters "$CHARS"
+  for spec in "calendar_time_xl:$PT_XL" "calendar_time_l:$PT_L" "calendar_temp:$PT_TEMP"; do
+    "$PY" fontconvert.py "${spec%%:*}" "${spec##*:}" "$TTF" --characters "$CHARS" 2>/dev/null
   done
 } > "$OUT"
+
+# Метрики из самих данных шрифта: высота цифры «0» над базовой линией и отступ от верха строки до верха цифры.
+python3 - "$OUT" "$PT_XL" "$PT_L" "$PT_TEMP" <<'PY'
+import re, sys
+path, pt_xl, pt_l, pt_t = sys.argv[1], *map(int, sys.argv[2:5])
+s = open(path, encoding="utf-8").read()
+
+def metrics(name):
+    d = re.search(r'static const EpdFontData %s = \{\s*\S+,\s*\S+,\s*\S+,\s*\d+,\s*\d+,\s*(\d+),' % name, s)
+    ascender = int(d.group(1))
+    g = re.search(r'%sGlyphs\[\] = \{(.*?)\};' % name, s, re.S).group(1)
+    top = int(re.search(r'\{ \d+, \d+, \d+, -?\d+, (-?\d+), \d+, \d+ \}, // 0\b', g).group(1))
+    return top, ascender - top
+
+xl, l, t = metrics("calendar_time_xl"), metrics("calendar_time_l"), metrics("calendar_temp")
+s += f"""
+// Метрики и размеры, с которыми сгенерирован шрифт (CalendarFace.cpp сверяет размеры с CalendarConfig.h).
+// DigitH — высота цифры «0» над базовой линией, TopOffset — от верха строки шрифта до верха цифры, px.
+namespace calendar_fonts {{
+constexpr int kTimePortraitPt = {pt_xl};
+constexpr int kTimeLandscapePt = {pt_l};
+constexpr int kTempPt = {pt_t};
+constexpr int kTimeXlDigitH = {xl[0]}, kTimeXlTopOffset = {xl[1]};
+constexpr int kTimeLDigitH = {l[0]}, kTimeLTopOffset = {l[1]};
+constexpr int kTempDigitH = {t[0]}, kTempTopOffset = {t[1]};
+}}  // namespace calendar_fonts
+"""
+open(path, "w", encoding="utf-8").write(s)
+PY
 echo "→ $OUT ($(wc -c < "$OUT") байт)"
+tail -9 "$OUT"

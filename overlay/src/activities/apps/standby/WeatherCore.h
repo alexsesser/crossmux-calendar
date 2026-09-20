@@ -5,24 +5,28 @@
 #include <cstdint>
 #include <string>
 
+#include "CalendarConfig.h"
 #include "CalendarCore.h"
 
 // Чистая часть погоды: типы, разбор ответов ipwhois.app и Open-Meteo, таблица кодов WMO,
 // (де)сериализация кэша. Без Arduino/SDK; ArduinoJson — header-only, тестируется на хосте.
 namespace weather_core {
 
-// Тестовый город по умолчанию (Москва): показывается, пока IP-геолокация ни разу не удалась.
-constexpr double kDefaultLat = 55.7558;
-constexpr double kDefaultLon = 37.6173;
-constexpr const char* kDefaultCity = "Москва";
+// Место по умолчанию — из CalendarConfig.h: показывается, пока IP-геолокация ни разу не удалась.
+constexpr double kDefaultLat = calendar_config::kDefaultLatitude;
+constexpr double kDefaultLon = calendar_config::kDefaultLongitude;
+constexpr const char* kDefaultCity = calendar_config::kDefaultCity;
+
+void copyUtf8(char* dst, size_t dstSize, const char* src);
 
 struct Place {
   double lat = kDefaultLat;
   double lon = kDefaultLon;
-  char city[48] = "Москва";   // пустая строка — название неизвестно
+  char city[48];              // пустая строка — название неизвестно
   bool fromIp = false;        // false — значение по умолчанию, IP-определение ещё не удавалось
   uint32_t ipEpoch = 0;       // когда место определено по IP
   uint8_t ipLang = 0;         // на каком языке получено название (calendar_core::Lang)
+  Place() { copyUtf8(city, sizeof(city), kDefaultCity); }
 };
 
 // Поле, которого нет, — NaN: интерфейс рисует заглушку именно для него, а не для всего блока.
@@ -69,8 +73,8 @@ struct Labels {
 const Labels& labels(calendar_core::Lang lang);
 
 // Данные старше этого — не показываем значения (заглушки); старше kStaleSec — помечаем «устарело».
-constexpr uint32_t kStaleSec = 3u * 3600u;
-constexpr uint32_t kExpireSec = 12u * 3600u;
+constexpr uint32_t kStaleSec = calendar_config::kStaleHours * 3600u;
+constexpr uint32_t kExpireSec = calendar_config::kExpireHours * 3600u;
 
 int buildGeoUrl(calendar_core::Lang lang, char* buf, size_t size);
 int buildForecastUrl(double lat, double lon, char* buf, size_t size);
@@ -83,7 +87,6 @@ bool parseForecast(const char* json, size_t len, uint32_t nowEpoch, Weather& out
 std::string serializeCache(const Cache& c);
 bool parseCache(const char* json, size_t len, Cache& out);  // при false out не меняется
 
-// Обрезка UTF-8 до maxBytes-1 байт по границе символа + завершающий ноль.
-void copyUtf8(char* dst, size_t dstSize, const char* src);
+// copyUtf8 (объявлена выше): обрезка UTF-8 до dstSize-1 байт по границе символа + завершающий ноль.
 
 }  // namespace weather_core

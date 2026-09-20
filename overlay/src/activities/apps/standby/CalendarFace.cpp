@@ -38,16 +38,15 @@ constexpr int kFontSmall = UI_10_FONT_ID;  // чипсы, шапка сетки,
 constexpr auto kBold = EpdFontFamily::BOLD;
 constexpr auto kRegular = EpdFontFamily::REGULAR;
 
-// Место под оверлей активности (заголовок грани и батарея) и точки-пейджер снизу.
-constexpr int kTopReserve = 34;
-constexpr int kBottomReserve = 44;
-constexpr int kSidePad = 24;
-constexpr int kCompactPad = 14;  // поля левой колонки в ландшафте
-constexpr int kLandscapeLeftPct = 41;  // ширина левой колонки в ландшафте, % от ширины
-
-constexpr int kMaxRowH = 68;
-constexpr int kMinRowH = 34;
-constexpr int kMinGap = 6;  // правило upstream: зазор между соседними элементами
+// Раскладка — значения в CalendarConfig.h.
+constexpr int kTopReserve = calendar_config::kTopReserve;        // под оверлей активности (заголовок, батарея)
+constexpr int kBottomReserve = calendar_config::kBottomReserve;  // под точки-пейджер
+constexpr int kSidePad = calendar_config::kSidePad;
+constexpr int kCompactPad = calendar_config::kLandscapePad;      // поля левой колонки в ландшафте
+constexpr int kLandscapeLeftPct = calendar_config::kLandscapeLeftPct;
+constexpr int kMaxRowH = calendar_config::kMaxRowH;
+constexpr int kMinRowH = calendar_config::kMinRowH;
+constexpr int kMinGap = 6;  // правило upstream: зазор между соседними элементами (не настройка)
 
 // «Нет значения» в интерфейсе. Тире из общей пунктуации есть не во всех подмножествах шрифта — берём ASCII.
 constexpr const char* kDash = "--";
@@ -82,10 +81,18 @@ constexpr int kFontTimeXl = 0x43414C58;  // время, портрет
 constexpr int kFontTimeL = 0x43414C4C;   // время, ландшафт
 constexpr int kFontTemp = 0x43414C54;    // температура
 
-// Высота цифры и отступ от верха строки шрифта до верха цифры, px.
-constexpr int kTimeXlDigitH = 104, kTimeXlTopOffset = 32;
-constexpr int kTimeLDigitH = 74, kTimeLTopOffset = 24;
-constexpr int kTempDigitH = 38, kTempTopOffset = 12;
+// Высота цифры и отступ от верха строки шрифта до верха цифры (px) генератор считает сам — namespace calendar_fonts
+// в CalendarFonts.h. Если размеры в CalendarConfig.h поменяли, а шрифт не перегенерировали — сборка остановится здесь.
+static_assert(calendar_fonts::kTimePortraitPt == calendar_config::kTimeFontPortraitPt &&
+                  calendar_fonts::kTimeLandscapePt == calendar_config::kTimeFontLandscapePt &&
+                  calendar_fonts::kTempPt == calendar_config::kTempFontPt,
+              "Размеры шрифта цифр в CalendarConfig.h изменены — запустите ./tools/gen_digit_fonts.sh");
+using calendar_fonts::kTempDigitH;
+using calendar_fonts::kTempTopOffset;
+using calendar_fonts::kTimeLDigitH;
+using calendar_fonts::kTimeLTopOffset;
+using calendar_fonts::kTimeXlDigitH;
+using calendar_fonts::kTimeXlTopOffset;
 
 // Шрифты регистрируются в рендерере один раз (он хранит их до перезагрузки); объекты должны жить всё это время.
 void ensureDigitFonts(GfxRenderer& r) {
@@ -652,7 +659,7 @@ StandbyFace::TickResult CalendarFace::tick() {
   const bool weatherChanged = weather_.step(renderer_, snap_.epoch, currentLang());
 
   // Вернуться к текущему месяцу, если давно не листали.
-  if (monthOffset_ != 0 && millis() - lastNavMs_ >= calendar_config::kMonthAutoReturnMs) {
+  if (monthOffset_ != 0 && millis() - lastNavMs_ >= calendar_config::kMonthAutoReturnSec * 1000u) {
     monthOffset_ = 0;
     return TickResult::Redraw;
   }

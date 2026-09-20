@@ -8,7 +8,7 @@
 - `design/calendar-standby-mockup.html` — макет экрана, открывать в браузере
 - `overlay/` — наш код, копируется в `work/` как есть: `CalendarFace` (экран), `CalendarCore` (логика, host-тесты), `SunTimes`,
   `WeatherCore` (разбор JSON, коды WMO, кэш — host-тесты), `WeatherClient` (Wi-Fi + HTTP, из `tick()` грани),
-  `CalendarOrientation` (хук 3), `CalendarConfig` (интервалы), `CalendarFonts.h` (СГЕНЕРИРОВАН tools/gen_digit_fonts.sh — руками не править)
+  `CalendarOrientation` (хук 3), `CalendarConfig` (ЕДИНСТВЕННЫЙ файл настроек: интервалы, город по умолчанию, раскладка, размеры шрифта, порядок граней — новые настраиваемые числа добавлять только сюда, не в другие файлы), `CalendarFonts.h` (СГЕНЕРИРОВАН tools/gen_digit_fonts.sh — руками не править)
 - `scripts/` — `sync.sh` (клон+overlay+хуки), `overlay.sh` (быстро накатить overlay на готовый `work/`), `build.sh`,
   `sim.sh`, `shots.sh` (скриншоты из симулятора без окна), `backup.sh` (дамп флеша), `flash.sh`,
   `update.sh` (проверка нового upstream; пишет upstream.lock только при зелёной сборке)

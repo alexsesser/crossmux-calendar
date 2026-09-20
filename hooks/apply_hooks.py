@@ -9,6 +9,7 @@
 Проверено на 0x1abin/crossmux @ c92edca (2026-09-20).
 """
 
+import os
 import pathlib
 import re
 import sys
@@ -39,6 +40,21 @@ def patch(root: pathlib.Path, rel: str, fn) -> None:
         print(f"  unchanged {rel}")
 
 
+CONFIG = pathlib.Path(
+    os.environ.get("CALMOD_CONFIG")
+    or pathlib.Path(__file__).resolve().parent.parent / "overlay/src/activities/apps/standby/CalendarConfig.h"
+)
+
+
+def calendar_first() -> bool:
+    """kCalendarFirstFace из CalendarConfig.h — единственного файла настроек. Нет файла/константы — True."""
+    try:
+        m = re.search(r"constexpr\s+bool\s+kCalendarFirstFace\s*=\s*(true|false)\s*;", CONFIG.read_text(encoding="utf-8"))
+    except OSError:
+        return True
+    return m is None or m.group(1) == "true"
+
+
 def standby_activity(s: str) -> str:
     """Подключить CalendarFace и заменить им строку китайского календаря в kFaces[]."""
     if MARK in s:
@@ -67,16 +83,20 @@ def standby_activity(s: str) -> str:
           else "    -> строки ChineseCalendarFace нет, просто добавляем свою")
     table = re.sub(r"\n{2,}", "\n", table).rstrip("\n")
 
-    # Календарь — ПЕРВАЯ строка таблицы: StandbyActivity::onEnter всегда открывает грань 0.
-    # SloppyClock остаётся второй (Left/Right листают между ними).
+    # Порядок граней задаёт kCalendarFirstFace (CalendarConfig.h): true — календарь первой строкой таблицы
+    # (StandbyActivity::onEnter всегда открывает грань 0), false — после Sloppy Clock. Left/Right листают между ними.
+    first = calendar_first()
     row = (
         "\n    {[]() -> std::unique_ptr<StandbyFace> { return makeUniqueNoThrow<CalendarFace>(); },\n"
-        f"     [](int, int) {{ return true; }}}},  // {MARK} обе ориентации, первая грань"
+        f"     [](int, int) {{ return true; }}}},  // {MARK} обе ориентации{', первая грань' if first else ''}"
     )
     head = "constexpr FaceEntry kFaces[] = {"
     if not table.startswith(head):
         sys.exit("ANCHOR LOST: таблица kFaces[] начинается не так, как ожидалось")
-    return s[:i] + head + row + table[len(head):] + s[e:]
+    print(f"    -> календарь {'первой' if first else 'второй'} гранью (kCalendarFirstFace)")
+    if first:
+        return s[:i] + head + row + table[len(head):] + s[e:]
+    return s[:i] + table + row + s[e:]
 
 
 def standby_orientation(s: str) -> str:

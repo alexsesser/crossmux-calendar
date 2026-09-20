@@ -17,12 +17,13 @@
 namespace {
 
 constexpr const char* kCachePath = "/.crosspoint/calendar_cache.json";
-constexpr uint32_t kFirstDelayMs = 4000;        // дать сначала нарисоваться экрану
-constexpr uint32_t kConnectTimeoutMs = 15000;
-constexpr uint32_t kBusyRetryMs = 60u * 1000u;  // Wi-Fi занят кем-то ещё
-constexpr uint32_t kFailRetryMs = 5u * 60u * 1000u;
-constexpr uint32_t kNoCredsRetryMs = 30u * 60u * 1000u;
-constexpr size_t kMaxBody = 4096;                // ответы — сотни байт; больше — явно не то
+// Тайминги — в CalendarConfig.h.
+constexpr uint32_t kFirstDelayMs = calendar_config::kFirstRequestDelaySec * 1000u;
+constexpr uint32_t kConnectTimeoutMs = calendar_config::kWifiConnectTimeoutSec * 1000u;
+constexpr uint32_t kBusyRetryMs = calendar_config::kRetryWifiBusySec * 1000u;
+constexpr uint32_t kFailRetryMs = calendar_config::kRetryAfterFailMin * 60u * 1000u;
+constexpr uint32_t kNoCredsRetryMs = calendar_config::kRetryNoWifiMin * 60u * 1000u;
+constexpr size_t kMaxBody = 4096;  // ответы — сотни байт; больше — явно не то (не настройка)
 
 bool fetch(const char* url, std::string& out) {
   if (!HttpDownloader::fetchUrl(url, out)) return false;

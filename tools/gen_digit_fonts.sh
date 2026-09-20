@@ -19,7 +19,8 @@ DIR="$ROOT/overlay/src/activities/apps/standby"
 CFG="$DIR/CalendarConfig.h"
 OUT="$DIR/CalendarFonts.h"
 MET="$DIR/CalendarFontMetrics.h"
-CHARS='0123456789:-°'
+CHARS_TIME='0123456789:'   # время: цифры и двоеточие
+CHARS_TEMP='0123456789-°'  # температура: цифры, минус и градус
 
 cfg() {  # cfg <имя константы> — целое из CalendarConfig.h
   local v; v="$(sed -n "s/^[[:space:]]*constexpr int $1[[:space:]]*=[[:space:]]*\([0-9][0-9]*\);.*/\1/p" "$CFG")"
@@ -29,13 +30,13 @@ cfg() {  # cfg <имя константы> — целое из CalendarConfig.h
 PT_XL="$(cfg kTimeFontPortraitPt)"; PT_L="$(cfg kTimeFontLandscapePt)"; PT_TEMP="$(cfg kTempFontPt)"
 
 {
-  echo "// Сгенерировано tools/gen_digit_fonts.sh (Ubuntu Medium, знаки: $CHARS). Не править руками."
+  echo "// Сгенерировано tools/gen_digit_fonts.sh (Ubuntu Medium; время: $CHARS_TIME, температура: $CHARS_TEMP). Не править руками."
   echo "// Гарнитура Ubuntu — Ubuntu Font Licence 1.0 (см. work/lib/EpdFont/builtinFonts/source/Ubuntu/UFL.txt)."
   echo "#pragma once"
   cd "$SCRIPTS"
-  for spec in "calendar_time_xl:$PT_XL" "calendar_time_l:$PT_L" "calendar_temp:$PT_TEMP"; do
-    "$PY" fontconvert.py "${spec%%:*}" "${spec##*:}" "$TTF" --characters "$CHARS" 2>/dev/null
-  done
+  "$PY" fontconvert.py calendar_time_xl "$PT_XL" "$TTF" --characters "$CHARS_TIME" 2>/dev/null
+  "$PY" fontconvert.py calendar_time_l "$PT_L" "$TTF" --characters "$CHARS_TIME" 2>/dev/null
+  "$PY" fontconvert.py calendar_temp "$PT_TEMP" "$TTF" --characters "$CHARS_TEMP" 2>/dev/null
 } > "$OUT"
 
 # Метрики из самих данных шрифта: высота цифры «0» над базовой линией и отступ от верха строки до верха цифры.

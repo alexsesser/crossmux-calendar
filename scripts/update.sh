@@ -14,7 +14,7 @@ if [ "$NEW" = "$OLD" ]; then
   exit 0
 fi
 echo "upstream: ${OLD:0:8} → ${NEW:0:8}"
-git -C "$WORK" log --oneline "$OLD..$NEW" 2>/dev/null | head -20 || true
+echo "что изменилось: https://github.com/0x1abin/crossmux/compare/${OLD:0:12}...${NEW:0:12}"  # клон поверхностный — истории локально нет
 
 "$ROOT/tests/run.sh"
 "$ROOT/scripts/build.sh"

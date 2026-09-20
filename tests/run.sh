@@ -11,14 +11,15 @@ g++ -std=c++17 -O1 -Wall -Wextra -I"$SRC" dump_sun.cpp "$SRC/CalendarCore.cpp" "
 python3 verify_sun.py build/dump_sun
 
 # Погода: нужен ArduinoJson (лежит в libdeps после первой сборки прошивки)
-AJ=../work/.pio/libdeps/papermono/ArduinoJson/src
-if [ -d "$AJ" ]; then
+AJ=""
+for d in ../work/.pio/libdeps/*/ArduinoJson/src; do [ -d "$d" ] && AJ="$d" && break; done  # из любого окружения PlatformIO
+if [ -n "$AJ" ]; then
   g++ -std=c++17 -O1 -Wall -Wextra -I"$SRC" -I"$AJ" test_weather.cpp "$SRC/CalendarCore.cpp" "$SRC/WeatherCore.cpp" -o build/test_weather
   ./build/test_weather data
   g++ -std=c++17 -O1 -Wall -Wextra -I"$SRC" -I"$AJ" test_holidays.cpp "$SRC/CalendarCore.cpp" "$SRC/HolidayCore.cpp" -o build/test_holidays
   ./build/test_holidays data
 else
-  echo "ArduinoJson не найден ($AJ) — тесты погоды пропущены: сначала ./scripts/build.sh"
+  echo "ArduinoJson не найден в work/.pio/libdeps — тесты погоды и праздников пропущены: сначала ./scripts/build.sh или SIM_BUILD_ONLY=1 ./scripts/sim.sh"
 fi
 
 g++ -std=c++17 -O1 -Wall -Wextra -I"$SRC" dump_moon.cpp "$SRC/CalendarCore.cpp" "$SRC/MoonPhase.cpp" -o build/dump_moon

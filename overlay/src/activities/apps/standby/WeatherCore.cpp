@@ -146,9 +146,9 @@ bool parseGeo(const char* json, size_t len, Lang lang, uint32_t nowEpoch, Place&
   return true;
 }
 
-bool parseForecast(const char* json, size_t len, uint32_t nowEpoch, Weather& out) {
-  JsonDocument doc;
-  if (deserializeJson(doc, json, len)) return false;
+namespace {
+
+bool fillWeather(const JsonDocument& doc, uint32_t nowEpoch, Weather& out) {
   JsonVariantConst cur = doc["current"];
   JsonVariantConst day = doc["daily"];
   Weather w;
@@ -169,9 +169,7 @@ bool parseForecast(const char* json, size_t len, uint32_t nowEpoch, Weather& out
   return true;
 }
 
-bool parseForecastDetail(const char* json, size_t len, uint32_t nowEpoch, Forecast& out) {
-  JsonDocument doc;
-  if (deserializeJson(doc, json, len)) return false;
+bool fillForecast(const JsonDocument& doc, uint32_t nowEpoch, Forecast& out) {
   Forecast f;
   f.utcOffsetSec = doc["utc_offset_seconds"] | 0;
   f.fetchedEpoch = nowEpoch;
@@ -211,6 +209,16 @@ bool parseForecastDetail(const char* json, size_t len, uint32_t nowEpoch, Foreca
   f.valid = nh > 0 || nd > 0;
   if (!f.valid) return false;
   out = f;
+  return true;
+}
+
+}  // namespace
+
+bool parseForecast(const char* json, size_t len, uint32_t nowEpoch, Weather& out, Forecast* detail) {
+  JsonDocument doc;
+  if (deserializeJson(doc, json, len)) return false;
+  if (!fillWeather(doc, nowEpoch, out)) return false;
+  if (detail) fillForecast(doc, nowEpoch, *detail);  // прогноз необязателен: не вышел — остаются старые данные
   return true;
 }
 

@@ -141,7 +141,7 @@ int drawWeatherBlock(GfxRenderer& r, int x, int y, int w, const weather_core::Ca
     if (compact && !stale && !expired) upd[0] = '\0';  // в узкой колонке места нет: свежесть видно и так
     const int updW = upd[0] ? textW(r, kFontSmall, upd) : 0;
     const char* cityRaw = c.place.city[0] ? c.place.city : WL.unknownPlace;
-    const std::string city = r.truncatedText(kFontSmall, cityRaw, inner - updW - (updW ? 12 : 0), kBold);
+    const Fit city(r, kFontSmall, cityRaw, inner - updW - (updW ? 12 : 0), kBold);
     r.drawText(kFontSmall, left, y, city.c_str(), true, kBold);
     if (upd[0]) r.drawText(kFontSmall, left + inner - updW, y, upd, true);
     y += r.getLineHeight(kFontSmall) + 4;
@@ -163,25 +163,32 @@ int drawWeatherBlock(GfxRenderer& r, int x, int y, int w, const weather_core::Ca
     if (!desc[0]) desc = WL.noData;
 
     // Описание: в широком режиме — одна строка + «ощущается»; в узком — до двух строк, «ощущается» уходит в детали.
-    std::string d1 = r.truncatedText(descFont, desc, textW2, kBold);
-    std::string d2;
-    if (compact && textW(r, descFont, desc, kBold) > textW2) {
-      const std::string full = desc;
-      size_t cut = std::string::npos;
-      for (size_t i = 0; i < full.size(); ++i) {
-        if (full[i] == ' ' && textW(r, descFont, full.substr(0, i).c_str(), kBold) <= textW2) cut = i;
+    // Пока описание помещается (почти всегда), строк в куче не создаём.
+    std::string d1s, d2s;
+    const char* d1 = desc;
+    const char* d2 = "";
+    if (textW(r, descFont, desc, kBold) > textW2) {
+      d1s = r.truncatedText(descFont, desc, textW2, kBold);
+      if (compact) {
+        const std::string full = desc;
+        size_t cut = std::string::npos;
+        for (size_t i = 0; i < full.size(); ++i) {
+          if (full[i] == ' ' && textW(r, descFont, full.substr(0, i).c_str(), kBold) <= textW2) cut = i;
+        }
+        if (cut != std::string::npos) {
+          d1s = full.substr(0, cut);
+          d2s = r.truncatedText(descFont, full.substr(cut + 1).c_str(), textW2, kBold);
+        }
       }
-      if (cut != std::string::npos) {
-        d1 = full.substr(0, cut);
-        d2 = r.truncatedText(descFont, full.substr(cut + 1).c_str(), textW2, kBold);
-      }
+      d1 = d1s.c_str();
+      d2 = d2s.c_str();
     }
     const int dh = r.getLineHeight(descFont);
-    const int lines = d2.empty() ? 1 : 2;
+    const int lines = d2[0] ? 2 : 1;
     const int blockH = lines * dh + (compact ? 0 : r.getLineHeight(kFontSmall));
     int ty = y + (iconS - blockH) / 2;
-    r.drawText(descFont, textX, ty, d1.c_str(), true, kBold);
-    if (!d2.empty()) r.drawText(descFont, textX, ty + dh, d2.c_str(), true, kBold);
+    r.drawText(descFont, textX, ty, d1, true, kBold);
+    if (d2[0]) r.drawText(descFont, textX, ty + dh, d2, true, kBold);
     if (!compact) {
       char feels[32], fd[16];
       fmtDeg(fd, sizeof(fd), w0.feels);
@@ -341,6 +348,13 @@ CalendarFace* CalendarFace::active_ = nullptr;
 
 bool CalendarFace::takeSnapshot(Snapshot& s) {
   const uint32_t now = TimeUtils::getCurrentValidTimestamp();
+  const int utcOffsetMin = (static_cast<int>(SETTINGS.clockUtcOffsetQ) - 48) * 15;
+  // tick() зовут на каждом такте loop() (сотни раз в секунду), а меняется снимок раз в минуту: пока минута та же
+  // (и пояс тот же), календарные поля пересчитывать не нужно — обновляем только момент.
+  if (now && s.valid && now / 60u == s.minuteKey && utcOffsetMin == s.utcOffsetMin) {
+    s.epoch = now;
+    return true;
+  }
   std::tm lt{};
   if (!now || !TimeUtils::getLocalDateTime(now, lt)) {
     s = Snapshot{};
@@ -359,7 +373,7 @@ bool CalendarFace::takeSnapshot(Snapshot& s) {
   s.daysInYear = calendar_core::daysInYear(s.year);
   s.minuteKey = now / 60u;
   s.dayKey = static_cast<uint32_t>(calendar_core::daysFromCivil(s.year, s.month, s.day));
-  s.utcOffsetMin = (static_cast<int>(SETTINGS.clockUtcOffsetQ) - 48) * 15;
+  s.utcOffsetMin = utcOffsetMin;
   return true;
 }
 

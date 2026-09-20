@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
   const std::string dir = argc > 1 ? argv[1] : "data";
   // --- Open-Meteo: реальный ответ ---
   {
-    const std::string j = slurp((dir + "/openmeteo_moscow.json").c_str());
+    const std::string j = slurp((dir + "/openmeteo_moscow_7d.json").c_str());
     Weather w; CHECK(parseForecast(j.data(), j.size(), 1000, w));
     CHECK(w.valid && !std::isnan(w.temp) && w.temp > -60 && w.temp < 60);
     CHECK(!std::isnan(w.feels) && !std::isnan(w.tMin) && !std::isnan(w.tMax) && w.tMin <= w.tMax);
@@ -78,7 +78,7 @@ int main(int argc, char** argv) {
   // --- Прогноз 24 ч + 7 дней: настоящий ответ ---
   {
     const std::string j = slurp((dir + "/openmeteo_moscow_7d.json").c_str());
-    Forecast f; CHECK(parseForecastDetail(j.data(), j.size(), 5000, f));
+    Forecast f; Weather w0; CHECK(parseForecast(j.data(), j.size(), 5000, w0, &f)); CHECK(w0.valid);
     CHECK(f.valid && f.nHours == 24 && f.nDays == 7 && f.utcOffsetSec == 10800 && f.fetchedEpoch == 5000);
     for (int i = 1; i < 24; ++i) CHECK(f.h[i].ts == f.h[i - 1].ts + 3600);
     for (int i = 1; i < 7; ++i) CHECK(f.d[i].ts == f.d[i - 1].ts + 86400);
@@ -95,8 +95,13 @@ int main(int argc, char** argv) {
     // кэш v1 (без прогноза) читается: прогноза нет, место есть
     const char* v1 = R"({"v":1,"place":{"lat":10.5,"lon":20.5,"city":"X","ip":1,"ipAt":3,"ipLang":0}})";
     Cache o; CHECK(parseCache(v1, std::strlen(v1), o)); CHECK(!o.fc.valid && !o.weather.valid && o.place.lat == 10.5);
-    // мусор в прогнозе
-    for (const char* bad : {"", "{}", "{\"hourly\":{\"time\":[]},\"daily\":{\"time\":[]}}", "{\"hourly\":{\"time\":[0]}}", "not json"}) { Forecast g = f; CHECK(!parseForecastDetail(bad, std::strlen(bad), 1, g)); CHECK(g.nHours == 24 && g.fetchedEpoch == 5000); }  }
+    // Мусор в прогнозе при валидной текущей погоде: погода разобрана (true), а прогноз не тронут
+    for (const char* bad : {"{\"current\":{\"temperature_2m\":5.0},\"hourly\":{\"time\":[0]}}", "{\"current\":{\"temperature_2m\":5.0},\"daily\":{\"time\":[]},\"hourly\":{\"time\":[]}}", "{\"current\":{\"temperature_2m\":5.0}}"}) {
+      Forecast g = f; Weather wb; CHECK(parseForecast(bad, std::strlen(bad), 1, wb, &g)); CHECK(wb.valid && g.nHours == 24 && g.fetchedEpoch == 5000);
+    }
+    // Мусор целиком: не разобрано вообще
+    for (const char* bad : {"", "{}", "not json"}) { Forecast g = f; Weather wb; CHECK(!parseForecast(bad, std::strlen(bad), 1, wb, &g)); CHECK(g.nHours == 24 && g.fetchedEpoch == 5000); }
+  }
   // --- Таблица WMO: все коды из документации Open-Meteo покрыты во всех языках ---
   for (int code : {0,1,2,3,45,48,51,53,55,56,57,61,63,65,66,67,71,73,75,77,80,81,82,85,86,95,96,99}) {
     for (Lang l : {Lang::En, Lang::Ru, Lang::De}) CHECK(description(l, code)[0] != '\0');

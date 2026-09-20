@@ -61,17 +61,17 @@ struct Txt {
 const Txt kRu = {"Назад", "Сегодня", "сегодня", "завтра", "вчера", "через %d дн.", "%d дн. назад", "ост. %d дн.", "День",
                  "Солнце", "Луна", "Погода", "освещена %d %%", "лунный день %d", "Полнолуние", "новолуние",
                  "%c%d мин к вчера", "Прогноз доступен на 7 дней вперёд", "7 дней",
-                 "Прогноз загрузится при подключении к Wi-Fi", "сегодня",
+                 "Загрузится при подключении к Wi-Fi", "сегодня",
                  "Температура · осадки % · ночь"};
 const Txt kEn = {"Back", "Today", "today", "tomorrow", "yesterday", "in %d days", "%d days ago", "%d left", "Day",
                  "Sun", "Moon", "Weather", "%d %% lit", "lunar day %d", "Full moon", "new moon",
                  "%c%d min vs yesterday", "Forecast covers the next 7 days", "7 days",
-                 "Forecast loads when Wi-Fi is available", "today",
+                 "Loads when Wi-Fi is available", "today",
                  "Temp. · rain % · night"};
 const Txt kDe = {"Zurück", "Heute", "heute", "morgen", "gestern", "in %d Tagen", "vor %d Tagen", "noch %d T.", "Tag",
                  "Sonne", "Mond", "Wetter", "%d %% hell", "Mondtag %d", "Vollmond", "Neumond",
                  "%c%d Min zu gestern", "Vorhersage für die nächsten 7 Tage", "7 Tage",
-                 "Vorhersage wird bei WLAN geladen", "heute",
+                 "Wird bei WLAN geladen", "heute",
                  "Temp. · Regen % · Nacht"};
 
 const Txt& txt(Lang l) { return l == Lang::Ru ? kRu : l == Lang::De ? kDe : kEn; }
@@ -139,22 +139,10 @@ int drawHeader(GfxRenderer& r, const Frame& f, const Txt& T, const char* title, 
   }
   // Название — по центру свободного места между кнопкой «Назад» и правым элементом.
   const int tl = f.x + pad + bw + 12, tr = f.x + f.w - pad - rw - 12;
-  const std::string tt = r.truncatedText(kFontText, title, tr - tl, kBold);
+  const Fit tt(r, kFontText, title, tr - tl, kBold);
   drawCentered(r, kFontText, tl, tr - tl, y + (kHdrH - lineH(r, kFontText)) / 2, tt.c_str(), true, kBold);
   r.drawLine(f.x + pad, y + kHdrH, f.x + f.w - pad, y + kHdrH, 2, true);
   return y + kHdrH + 8;
-}
-
-// Первые n символов UTF-8 строки (для «сентября» → «сен»).
-std::string abbr(const char* s, int n) {
-  std::string o;
-  for (int cnt = 0; *s && cnt < n; ++cnt) {
-    const unsigned char ch = static_cast<unsigned char>(*s);
-    const int len = ch < 0x80 ? 1 : (ch >> 5) == 6 ? 2 : (ch >> 4) == 14 ? 3 : 4;
-    o.append(s, static_cast<size_t>(len));
-    s += len;
-  }
-  return o;
 }
 
 struct Ymd {
@@ -253,7 +241,7 @@ int drawCurrent(GfxRenderer& r, int x, int y, int w, const Ctx& c, const WxView&
   const char* desc = (ok && cur.code >= 0) ? weather_core::description(c.lang, cur.code) : "";
   if (!desc[0]) desc = WL.noData;
   const int rangeW = land ? 0 : 92;
-  const std::string d = r.truncatedText(kFontText, desc, x + w - textX - rangeW, kBold);
+  const Fit d(r, kFontText, desc, x + w - textX - rangeW, kBold);
   char fd[16], feels[40];
   fmtDeg(fd, sizeof(fd), ok ? cur.feels : NAN);
   std::snprintf(feels, sizeof(feels), "%s %s", WL.feels, fd);
@@ -374,7 +362,7 @@ void drawHourTable(GfxRenderer& r, int x, int y, int w, int rowH, const weather_
 void drawNoForecast(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T) {
   drawWeatherIcon(r, Icon::Unknown, x + (w - 64) / 2, y + 30, 64);
   drawCentered(r, kFontText, x, w, y + 106, weather_core::labels(c.lang).noData, true, kBold);
-  const std::string h = r.truncatedText(kFontSmall, T.noFcHint, w - 16);
+  const Fit h(r, kFontSmall, T.noFcHint, w - 16);
   drawCentered(r, kFontSmall, x, w, y + 106 + lineH(r, kFontText) + 6, h.c_str());
 }
 
@@ -399,7 +387,7 @@ void drawWeatherToday(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T
     const int graphH = 170;
     drawHourGraph(r, x, y, w, graphH, hs, n, fc.utcOffsetSec);
     y += graphH + 2;
-    const std::string cap = r.truncatedText(kFontSmall, T.cap, w);
+    const Fit cap(r, kFontSmall, T.cap, w);
     drawCentered(r, kFontSmall, x, w, y, cap.c_str());
     y += lineH(r, kFontSmall) + 6;
     const int foot = lineH(r, kFontSmall) + 6;
@@ -425,7 +413,7 @@ void drawWeatherToday(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T
     drawNoForecast(r, rx, y, rw, c, T);
     return;
   }
-  const std::string cap = r.truncatedText(kFontSmall, T.cap, leftW);
+  const Fit cap(r, kFontSmall, T.cap, leftW);
   r.drawText(kFontSmall, lx, ly, cap.c_str(), true);
   const int graphH = 118;
   drawHourGraph(r, rx, y, rw, graphH, hs, n, fc.utcOffsetSec);
@@ -477,7 +465,11 @@ void drawWeatherWeek(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T,
     if (tight) {
       char one[48];
       std::snprintf(one, sizeof(one), "%s", l1);
-      if (!isToday) std::snprintf(one, sizeof(one), "%s %s", l1, abbr(l2, 3).c_str());
+      if (!isToday) {
+        char ab[16];
+        abbrTo(ab, sizeof(ab), l2, 3);
+        std::snprintf(one, sizeof(one), "%s %s", l1, ab);
+      }
       r.drawText(kFontText, x + 6, ry + (rowH - lhT) / 2, one, true, kBold);
     } else {
       const int ty = ry + (rowH - lhT - lhS) / 2;
@@ -543,7 +535,7 @@ void drawWeather(GfxRenderer& r, const Frame& f, const State& s, const Ctx& c, H
   char hintFull[40];
   std::snprintf(hintFull, sizeof(hintFull), s.page == 0 ? "%s >" : "< %s", hint);
   const int hw = textW(r, kFontSmall, hintFull);
-  const std::string u = r.truncatedText(kFontSmall, upd, f.w - 2 * pad - hw - 12);
+  const Fit u(r, kFontSmall, upd, f.w - 2 * pad - hw - 12);
   const int fy = f.bottom - lineH(r, kFontSmall) - 2;
   r.drawText(kFontSmall, f.x + pad, fy, u.c_str(), true);
   r.drawText(kFontSmall, f.x + f.w - pad - hw, fy, hintFull, true, kBold);
@@ -566,6 +558,42 @@ int endCard(GfxRenderer& r, Card& k) {
   const int h = k.cy - k.y + 6;
   r.drawRoundedRect(k.x, k.y, k.w, h, 2, 12, true);
   return h + 8;
+}
+
+// Длина дня (минуты) раз в 5 суток за год — для мини-графика на экране «День».
+struct SunSeries {
+  static constexpr int kPts = 74;
+  int year = 0;
+  double lat = 0, lon = 0;
+  int offMin = 0;
+  bool valid = false;
+  uint16_t v[kPts] = {};
+  uint16_t lo = 0, hi = 0;
+};
+
+const SunSeries& sunSeries(const Ctx& c, int year) {
+  static SunSeries cache;  // 160 байт статики вместо пересчёта на каждый кадр
+  const double lat = c.wx.place.lat, lon = c.wx.place.lon;
+  if (cache.valid && cache.year == year && cache.lat == lat && cache.lon == lon && cache.offMin == c.t.utcOffsetMin) return cache;
+  cache.year = year;
+  cache.lat = lat;
+  cache.lon = lon;
+  cache.offMin = c.t.utcOffsetMin;
+  cache.lo = 1440;
+  cache.hi = 0;
+  const int32_t jan1 = calendar_core::daysFromCivil(year, 1, 1);
+  const int ndays = static_cast<int>(calendar_core::daysInYear(year));
+  for (int i = 0; i < SunSeries::kPts; ++i) {
+    int yy;
+    unsigned mm, dd;
+    calendar_core::civilFromDays(jan1 + std::min(i * 5, ndays - 1), yy, mm, dd);
+    const auto q = sun_times::compute(yy, mm, dd, lat, lon, c.t.utcOffsetMin);
+    cache.v[i] = static_cast<uint16_t>(q.valid ? q.daylightMin : 0);
+    cache.lo = std::min(cache.lo, cache.v[i]);
+    cache.hi = std::max(cache.hi, cache.v[i]);
+  }
+  cache.valid = true;
+  return cache;
 }
 
 int drawSunCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T, const State& s, bool withCurve) {
@@ -597,33 +625,21 @@ int drawSunCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T,
   drawCentered(r, kFontText, x, w, k.cy, l1, true, kBold);
   k.cy += lineH(r, kFontText) + 2;
   if (l2[0]) {
-    const std::string t2 = r.truncatedText(kFontSmall, l2, w - 16);
+    const Fit t2(r, kFontSmall, l2, w - 16);
     drawCentered(r, kFontSmall, x, w, k.cy, t2.c_str());
     k.cy += lineH(r, kFontSmall) + 4;
   }
   if (!withCurve) return endCard(r, k);
-  // Длина дня за год: кривая с точкой на выбранной дате.
+  // Длина дня за год: кривая с точкой на выбранной дате. 74 расчёта восхода/заката (двойная точность без FPU —
+  // заметные миллисекунды) кэшируются: пересчёт только при смене года, места или пояса, а не на каждом листании дня.
   const int gh = 40, gw = w - 24, gx = x + 12, gy = k.cy;
-  constexpr int kPts = 74;
-  static uint16_t series[kPts];
-  uint16_t lo = 1440, hi = 0;
-  const int32_t jan1 = calendar_core::daysFromCivil(s.dayY, 1, 1);
-  const int ndays = static_cast<int>(calendar_core::daysInYear(s.dayY));
-  for (int i = 0; i < kPts; ++i) {
-    int yy;
-    unsigned mm, dd;
-    calendar_core::civilFromDays(jan1 + std::min(i * 5, ndays - 1), yy, mm, dd);
-    const auto q = sun_times::compute(yy, mm, dd, c.wx.place.lat, c.wx.place.lon, c.t.utcOffsetMin);
-    series[i] = static_cast<uint16_t>(q.valid ? q.daylightMin : 0);
-    lo = std::min(lo, series[i]);
-    hi = std::max(hi, series[i]);
-  }
-  if (hi > lo) {
-    auto px = [&](int i) { return gx + i * gw / (kPts - 1); };
-    auto py2 = [&](uint16_t v) { return gy + gh - 4 - static_cast<int>((v - lo) * (gh - 8) / (hi - lo)); };
-    for (int i = 1; i < kPts; ++i) r.drawLine(px(i - 1), py2(series[i - 1]), px(i), py2(series[i]), 2, true);
-    const int di = std::min(kPts - 1, static_cast<int>(calendar_core::dayOfYear(s.dayY, s.dayM, s.dayD) - 1) / 5);
-    disc(r, px(di), py2(series[di]), 5, Color::Black);
+  const SunSeries& ss = sunSeries(c, s.dayY);
+  if (ss.hi > ss.lo) {
+    auto px = [&](int i) { return gx + i * gw / (SunSeries::kPts - 1); };
+    auto py2 = [&](uint16_t v) { return gy + gh - 4 - static_cast<int>((v - ss.lo) * (gh - 8) / (ss.hi - ss.lo)); };
+    for (int i = 1; i < SunSeries::kPts; ++i) r.drawLine(px(i - 1), py2(ss.v[i - 1]), px(i), py2(ss.v[i]), 2, true);
+    const int di = std::min(SunSeries::kPts - 1, static_cast<int>(calendar_core::dayOfYear(s.dayY, s.dayM, s.dayD) - 1) / 5);
+    disc(r, px(di), py2(ss.v[di]), 5, Color::Black);
   }
   k.cy += gh + 2;
   return endCard(r, k);
@@ -641,7 +657,7 @@ int drawMoonCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T
   char l2[64], l3[64];
   std::snprintf(l2, sizeof(l2), T.lit, static_cast<int>(std::lround(mi.illum * 100)));
   std::snprintf(l3, sizeof(l3), T.lunarDay, mi.lunarDay);
-  const std::string name = r.truncatedText(kFontText, moon_phase::phaseName(c.lang, mi.phaseIdx), tw, kBold);
+  const Fit name(r, kFontText, moon_phase::phaseName(c.lang, mi.phaseIdx), tw, kBold);
   int ty = k.cy + 2;
   r.drawText(kFontText, tx, ty, name.c_str(), true, kBold);
   ty += lineH(r, kFontText);
@@ -649,9 +665,11 @@ int drawMoonCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T
   ty += lineH(r, kFontSmall);
   r.drawText(kFontSmall, tx, ty, l3, true);
   k.cy += std::max(2 * rad + 8, ty + lineH(r, kFontSmall) - k.cy + 4);
-  char e1[48], e2[48], both[120];
-  std::snprintf(e1, sizeof(e1), "%s %u %s", T.nextFull, nf.day, abbr(calendar_core::monthNameGenitive(c.lang, nf.month), 3).c_str());
-  std::snprintf(e2, sizeof(e2), "%s %u %s", T.nextNew, nn.day, abbr(calendar_core::monthNameGenitive(c.lang, nn.month), 3).c_str());
+  char e1[48], e2[48], both[120], mo1[16], mo2[16];
+  abbrTo(mo1, sizeof(mo1), calendar_core::monthNameGenitive(c.lang, nf.month), 3);
+  abbrTo(mo2, sizeof(mo2), calendar_core::monthNameGenitive(c.lang, nn.month), 3);
+  std::snprintf(e1, sizeof(e1), "%s %u %s", T.nextFull, nf.day, mo1);
+  std::snprintf(e2, sizeof(e2), "%s %u %s", T.nextNew, nn.day, mo2);
   std::snprintf(both, sizeof(both), "%s  \xC2\xB7  %s", e1, e2);
   if (textW(r, kFontSmall, both) <= w - 16) {
     drawCentered(r, kFontSmall, x, w, k.cy, both);
@@ -679,7 +697,7 @@ int drawWeatherCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt
     }
   }
   if (idx < 0) {
-    const std::string t = r.truncatedText(kFontSmall, T.fcOnly, w - 16);
+    const Fit t(r, kFontSmall, T.fcOnly, w - 16);
     drawCentered(r, kFontSmall, x, w, k.cy + 4, t.c_str());
     k.cy += lineH(r, kFontSmall) + 10;
     return endCard(r, k);
@@ -690,14 +708,14 @@ int drawWeatherCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt
   drawWeatherIcon(r, d.code >= 0 ? weather_core::iconFor(d.code, true) : Icon::Unknown, x + 12, k.cy + 2, iconS);
   const int tx = x + 12 + iconS + 12, tw = w - (tx - x) - 10;
   const char* desc = d.code >= 0 ? weather_core::description(c.lang, d.code) : WL.noData;
-  const std::string dn = r.truncatedText(kFontText, desc, tw, kBold);
+  const Fit dn(r, kFontText, desc, tw, kBold);
   r.drawText(kFontText, tx, k.cy + 2, dn.c_str(), true, kBold);
   char a[16], b[16], mm[16], line[96];
   fmtDeg(a, sizeof(a), d.tMin);
   fmtDeg(b, sizeof(b), d.tMax);
   fmtMm(mm, sizeof(mm), d.precipMm, c.lang);
   std::snprintf(line, sizeof(line), "%s %s  \xC2\xB7  %s %s  \xC2\xB7  %s %s", WL.min, a, WL.max, b, mm, WL.mmUnit);
-  const std::string l = r.truncatedText(kFontSmall, line, tw);
+  const Fit l(r, kFontSmall, line, tw);
   r.drawText(kFontSmall, tx, k.cy + 2 + lineH(r, kFontText), l.c_str(), true);
   k.cy += iconS + 8;
   const int h = endCard(r, k);
@@ -738,7 +756,7 @@ int drawDayTitle(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T
   if (textW(r, kFontSmall, chips) > w - 8) {  // узкая колонка: без «осталось N дн.»
     std::snprintf(chips, sizeof(chips), "%s %u  \xC2\xB7  %s %u / %u", CL.week, calendar_core::isoWeek(s.dayY, s.dayM, s.dayD), CL.day, doy, diy);
   }
-  const std::string tc = r.truncatedText(kFontSmall, chips, w - 8);
+  const Fit tc(r, kFontSmall, chips, w - 8);
   drawCentered(r, kFontSmall, x, w, y, tc.c_str());
   y += lhS + 8;
 
@@ -749,7 +767,7 @@ int drawDayTitle(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T
     if (lb[0]) {
       if (di.off) r.fillRectDither(x + 2, y + 2, w - 4, slotH - 4, Color::LightGray);
       r.drawRoundedRect(x, y, w, slotH, 2, 10, true);
-      const std::string t = r.truncatedText(kFontText, lb, w - 20, kBold);
+      const Fit t(r, kFontText, lb, w - 20, kBold);
       drawCentered(r, kFontText, x, w, y + (slotH - lhT) / 2, t.c_str(), true, kBold);
     }
     y += slotH + 8;
@@ -840,8 +858,9 @@ void drawYear(GfxRenderer& r, const Frame& f, const State& s, const Ctx& c, HitM
     const int gx = mx + (mw - cw * 7) / 2;
     int gy = my + titleH;
     for (int d = 0; d < 7; ++d) {
-      const std::string ab = abbr(calendar_core::weekdayShort(c.lang, d), 1);
-      drawCentered(r, nf, gx + d * cw, cw, gy + (rowH - lhN) / 2, ab.c_str(), true, d >= 5 ? kBold : kRegular);
+      char ab[8];
+      abbrTo(ab, sizeof(ab), calendar_core::weekdayShort(c.lang, d), 1);
+      drawCentered(r, nf, gx + d * cw, cw, gy + (rowH - lhN) / 2, ab, true, d >= 5 ? kBold : kRegular);
     }
     r.drawLine(gx, gy + rowH - 1, gx + cw * 7, gy + rowH - 1, 1, true);
     gy += rowH;

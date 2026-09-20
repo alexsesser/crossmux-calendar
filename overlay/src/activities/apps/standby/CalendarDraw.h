@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 
 #include "CalendarCore.h"
 #include "CalendarFontMetrics.h"
@@ -53,6 +54,28 @@ int textW(const GfxRenderer& r, int font, const char* s, EpdFontFamily::Style st
 // Текст по центру горизонтального отрезка [x, x+w); y — верх строки.
 void drawCentered(const GfxRenderer& r, int font, int x, int w, int y, const char* s, bool black = true,
                   EpdFontFamily::Style st = kRegular);
+
+// Текст, обрезанный «…» под ширину. Пока текст помещается (почти всегда) — это просто указатель на исходную строку,
+// без выделения памяти; копия создаётся только когда не влезло.
+class Fit {
+ public:
+  Fit(const GfxRenderer& r, int font, const char* text, int maxW, EpdFontFamily::Style st = kRegular) : p_(text) {
+    if (r.getTextWidth(font, text, st) > maxW) {
+      tmp_ = r.truncatedText(font, text, maxW, st);
+      p_ = tmp_.c_str();
+    }
+  }
+  Fit(const Fit&) = delete;
+  Fit& operator=(const Fit&) = delete;
+  const char* c_str() const { return p_; }
+
+ private:
+  std::string tmp_;
+  const char* p_;
+};
+
+// Первые n символов UTF-8 строки в буфер («сентября» → «сен»).
+void abbrTo(char* out, size_t outSize, const char* s, int n);
 
 // Шрифты крупных цифр регистрируются в рендерере один раз; вызывать в начале каждого render().
 void ensureDigitFonts(GfxRenderer& r);

@@ -113,14 +113,12 @@ constexpr uint32_t kExpireSec = calendar_config::kExpireHours * 3600u;
 int buildGeoUrl(calendar_core::Lang lang, char* buf, size_t size);
 int buildForecastUrl(double lat, double lon, char* buf, size_t size);
 
-// Разбор почасового и дневного прогноза из того же ответа Open-Meteo (нужен timeformat=unixtime).
-// out меняется только при true.
-bool parseForecastDetail(const char* json, size_t len, uint32_t nowEpoch, Forecast& out);
-
 // ipwhois.app: {"success":true,"city":"..","latitude":..,"longitude":..}. out меняется только при true.
 bool parseGeo(const char* json, size_t len, calendar_core::Lang lang, uint32_t nowEpoch, Place& out);
 // Open-Meteo forecast (current + daily). out меняется только при true (есть температура).
-bool parseForecast(const char* json, size_t len, uint32_t nowEpoch, Weather& out);
+// Если задан detail — из того же разбора заполняется и прогноз 24 ч + 7 дней (он не обязателен: при его отсутствии
+// в ответе detail не меняется, а функция всё равно возвращает true).
+bool parseForecast(const char* json, size_t len, uint32_t nowEpoch, Weather& out, Forecast* detail = nullptr);
 
 std::string serializeCache(const Cache& c);
 bool parseCache(const char* json, size_t len, Cache& out);  // при false out не меняется

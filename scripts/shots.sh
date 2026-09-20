@@ -8,6 +8,7 @@
 #   orient      ориентации 1/2/3 из настроек (как плитка в шторке)
 #   month       листание (6-строчный август) и Immersive
 #   docs        кадры для README: Москва (мок геолокации и прогноза) + живой календарь праздников
+#   hang        сеть «зависла» (прокси в никуда): экран и тапы должны работать, пока сетевая задача ждёт
 #   holidays_offline нет сети и календаря: май 2026 и 2027 — только выходные и фиксированные праздники
 #   detail_land то же в ландшафте (погода ×2, день, год)
 #   detail      тапы: погода (сегодня, 7 дней), день, май с праздниками, 9 мая, год (нужен интернет, эмулируется Paper Mono с тачем)
@@ -17,7 +18,7 @@ set -euo pipefail
 source "$(dirname "$0")/env.sh"
 OUT="$(mkdir -p "${1:-$ROOT/shots}" && cd "${1:-$ROOT/shots}" && pwd)"
 shift || true
-SCENARIOS=("$@"); [ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(nodata moscow live offline stale orient month detail detail_land holidays_offline)  # docs — отдельно: ./scripts/shots.sh shots docs
+SCENARIOS=("$@"); [ ${#SCENARIOS[@]} -gt 0 ] || SCENARIOS=(nodata moscow live offline stale orient month detail detail_land holidays_offline hang)  # docs — отдельно: ./scripts/shots.sh shots docs
 BIN="$SIM_BIN"
 [ -x "$BIN" ] || { echo "нет $BIN — SIM_BUILD_ONLY=1 ./scripts/sim.sh" >&2; exit 1; }
 FS="$WORK/fs_/.crosspoint"
@@ -49,11 +50,16 @@ wifi_none()    { rm -f "$FS/wifi.json"; }
 cache_clear()  { rm -f "$FS/calendar_cache.json" "$FS/calendar_holidays.json"; }
 DEAD_PROXY="http://127.0.0.1:9"
 
-# Первый запуск: экран выбора языка (список кнопочный). Русский — на 7 строк выше выделенного.
-if ! grep -q '"language":"RU"' "$FS/settings.json" 2>/dev/null; then
-  SC=""; t=1200; for _ in 1 2 3 4 5 6 7; do SC="$SC$t:UP;"; t=$((t+300)); done
-  run "$SC$t:ENTER;$((t+2000)):QUIT" ""
-fi
+# Язык — русский, знакомство пройдено: пишем настройки напрямую (выбор языка кнопками в списке зависит от того,
+# с какого элемента он стартует, и ненадёжен). Остальные поля SETTINGS берёт по умолчанию.
+mkdir -p "$FS"
+python3 - "$FS/settings.json" <<'PY'
+import json, os, sys
+p = sys.argv[1]
+d = json.load(open(p)) if os.path.exists(p) else {}
+d.update({"language": "RU", "onboardingVersion": d.get("onboardingVersion", 1), "langSku": "global"})
+json.dump(d, open(p, "w"))
+PY
 set_orientation 0
 set_utc
 
@@ -64,7 +70,7 @@ for s in "${SCENARIOS[@]}"; do
       wifi_none; cache_clear
       standby 9000 "8000:$OUT/wx_nodata.bmp" ;;
     moscow)
-      wifi_saved; cache_clear; mkdir -p "$OUT/mock"; cp "$ROOT/tests/data/openmeteo_moscow.json" "$OUT/mock/forecast"
+      wifi_saved; cache_clear; mkdir -p "$OUT/mock"; cp "$ROOT/tests/data/openmeteo_moscow_7d.json" "$OUT/mock/forecast"
       CROSSPOINT_SIM_HTTP_MOCK_ROOT="$OUT/mock" https_proxy=$DEAD_PROXY HTTPS_PROXY=$DEAD_PROXY \
         standby 13000 "12000:$OUT/wx_moscow.bmp" ;;
     live)
@@ -123,6 +129,11 @@ json.dump({"v": 2, "place": {"lat": 55.7558, "lon": 37.6173, "city": "Москв
 PY
       CROSSPOINT_SIM_HTTP_MOCK_ROOT="$OUT/mock" run "1500:BACK;23000:QUIT" "22000:$OUT/docs_land_main.bmp"
       set_orientation 0 ;;
+    hang)
+      wifi_saved; cache_clear
+      https_proxy=http://10.255.255.1:3128 HTTPS_PROXY=http://10.255.255.1:3128 \
+        run "1500:BACK;9000:TAP:240,330;12000:BACK;14000:QUIT" \
+            "6500:$OUT/hang_1_main.bmp;10500:$OUT/hang_2_weather_opened.bmp;13500:$OUT/hang_3_closed.bmp" ;;
     holidays_offline)
       wifi_none; cache_clear
       run "1500:BACK;3000:UP;3500:UP;4000:UP;4500:UP;7500:QUIT" "6500:$OUT/holidays_offline_may.bmp" ;;

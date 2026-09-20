@@ -44,6 +44,18 @@ void drawCentered(const GfxRenderer& r, int font, int x, int w, int y, const cha
 }
 
 // Шрифты регистрируются в рендерере один раз (он хранит их до перезагрузки); объекты должны жить всё это время.
+void abbrTo(char* out, size_t outSize, const char* s, int n) {
+  size_t o = 0;
+  for (int cnt = 0; *s && cnt < n; ++cnt) {
+    const unsigned char ch = static_cast<unsigned char>(*s);
+    const size_t len = ch < 0x80 ? 1 : (ch >> 5) == 6 ? 2 : (ch >> 4) == 14 ? 3 : 4;
+    if (o + len + 1 > outSize) break;
+    for (size_t i = 0; i < len && s[i]; ++i) out[o++] = s[i];
+    s += len;
+  }
+  if (outSize) out[o] = '\0';
+}
+
 void ensureDigitFonts(GfxRenderer& r) {
   static bool done = false;
   if (done) return;

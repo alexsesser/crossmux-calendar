@@ -14,6 +14,7 @@
 #include <string>
 
 #include "CalendarConfig.h"
+#include "CalmodWifi.h"
 #include "NetworkStartup.h"
 #include "WifiCredentialStore.h"
 #include "activities/RenderLock.h"
@@ -112,7 +113,7 @@ void WeatherClient::Job::run() {
     if (pass.empty()) {
       WiFi.begin(ssid.c_str());
     } else {
-      WiFi.begin(ssid.c_str(), pass.c_str());
+      calmod_wifi::begin(ssid.c_str(), pass.c_str());
     }
     ownsWifi = true;
     LOG_DBG("WX", "wifi connecting: %s", ssid.c_str());

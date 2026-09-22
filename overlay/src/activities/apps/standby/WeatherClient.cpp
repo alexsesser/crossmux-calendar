@@ -10,6 +10,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <algorithm>
 #include <atomic>
 #include <string>
 
@@ -65,7 +66,17 @@ struct WeatherClient::Job {
   uint32_t nowEpoch = 0;
   calendar_core::Lang lang = calendar_core::Lang::En;
   bool alreadyConnected = false;  // Wi-Fi поднят не нами — не выключаем
-  std::string ssid, pass;
+  // Все сохранённые сети (startJob() читает их под RenderLock — SD делит SPI с панелью), не только последняя
+  // использованная: раньше грань слепо пробовала только её и, придя домой после работы, упорно долбилась в
+  // невидимую рабочую сеть, пока кто-то не переподключался вручную. run() сам сканирует эфир и выбирает,
+  // какая из запомненных сетей сейчас в зоне видимости.
+  struct Candidate {
+    std::string ssid, pass;
+  };
+  static constexpr unsigned kMaxCandidates = 8;  // столько же, сколько WifiCredentialStore::MAX_NETWORKS (private)
+  Candidate candidates[kMaxCandidates];
+  unsigned nCandidates = 0;
+  std::string lastSsid;  // WIFI_STORE.getLastConnectedSsid(): не видна в скане — пробуем её вслепую (скрытая сеть)
   bool doWeather = false;
   bool needGeo = false;
   weather_core::Place place;
@@ -89,6 +100,8 @@ struct WeatherClient::Job {
   unsigned nHol = 0;
   bool holBad = false;      // сервис вернул не то — не долбим сразу снова
   bool holFailed = false;   // хотя бы один год не скачался — повторим позже
+  std::string connectedSsid;  // какая сеть подключилась (пусто — сами не поднимали Wi-Fi или не вышло); applyJob()
+                              // обновляет ею WIFI_STORE.setLastConnectedSsid() — SD-запись только из главной задачи
 
   // 0 — работает; 1 — готово, владелец грань; 2 — брошено гранью, владелец задача.
   std::atomic<int> state{0};
@@ -110,21 +123,58 @@ void WeatherClient::Job::run() {
     }
     WiFi.disconnect(true, true);  // «чистый лист», как в StandbyActivity::trySilentWifiConnect
     delay(100);
-    if (pass.empty()) {
-      WiFi.begin(ssid.c_str());
-    } else {
-      calmod_wifi::begin(ssid.c_str(), pass.c_str());
+    ownsWifi = true;  // радио теперь наше — выключить в конце, даже если ниже окажется нечего пробовать
+
+    // Какая из запомненных сетей сейчас рядом? Один короткий скан (обычно 1–3 с) вместо слепой попытки последней
+    // использованной сети и полного таймаута (kWifiConnectTimeoutSec), если дома/на работе оказалась не она.
+    std::string ssid, pass;
+    const int16_t found = WiFi.scanNetworks();
+    int32_t bestRssi = INT32_MIN;
+    for (int16_t i = 0; i < found; ++i) {
+      const String s = WiFi.SSID(i);
+      if (s.isEmpty()) continue;  // скрытая сеть в обычный скан не попадает — шанс только у lastSsid вслепую ниже
+      for (unsigned c = 0; c < nCandidates; ++c) {
+        if (s != candidates[c].ssid.c_str()) continue;
+        if (ssid.empty() || WiFi.RSSI(i) > bestRssi) {  // среди нескольких видимых запомненных — та, что сильнее
+          ssid = candidates[c].ssid;
+          pass = candidates[c].pass;
+          bestRssi = WiFi.RSSI(i);
+        }
+      }
     }
-    ownsWifi = true;
-    LOG_DBG("WX", "wifi connecting: %s", ssid.c_str());
-    wl_status_t st;
-    do {
-      delay(100);
-      st = WiFi.status();
-    } while (st != WL_CONNECTED && st != WL_CONNECT_FAILED && st != WL_NO_SSID_AVAIL && millis() - t0 < kConnectTimeoutMs);
-    if (st != WL_CONNECTED) {
-      LOG_DBG("WX", "wifi connect failed (status=%d)", static_cast<int>(st));
+    WiFi.scanDelete();
+    if (ssid.empty() && !lastSsid.empty()) {
+      // Скан не нашёл ни одной запомненной сети (или сама не удалась) — последний шанс, как раньше: вслепую
+      // пробуем последнюю использованную. Так по-прежнему работают скрытые сети.
+      for (unsigned c = 0; c < nCandidates; ++c) {
+        if (candidates[c].ssid == lastSsid) {
+          ssid = candidates[c].ssid;
+          pass = candidates[c].pass;
+          break;
+        }
+      }
+    }
+    if (ssid.empty()) {
+      LOG_DBG("WX", "no saved network in range");
       netOk = false;
+    } else {
+      if (pass.empty()) {
+        WiFi.begin(ssid.c_str());
+      } else {
+        calmod_wifi::begin(ssid.c_str(), pass.c_str());
+      }
+      LOG_DBG("WX", "wifi connecting: %s", ssid.c_str());
+      wl_status_t st;
+      do {
+        delay(100);
+        st = WiFi.status();
+      } while (st != WL_CONNECTED && st != WL_CONNECT_FAILED && st != WL_NO_SSID_AVAIL && millis() - t0 < kConnectTimeoutMs);
+      if (st == WL_CONNECTED) {
+        connectedSsid = ssid;  // applyJob() обновит WIFI_STORE, если сеть сменилась
+      } else {
+        LOG_DBG("WX", "wifi connect failed (status=%d)", static_cast<int>(st));
+        netOk = false;
+      }
     }
   }
 
@@ -347,16 +397,17 @@ void WeatherClient::startJob(GfxRenderer& renderer, uint32_t nowEpoch, calendar_
     }
     RenderLock lock;  // файл с сетями лежит на SD
     if (WIFI_STORE.getCredentialCount() == 0) WIFI_STORE.loadFromFile();
-    const std::string last = WIFI_STORE.getLastConnectedSsid();
-    const auto cred = last.empty() ? std::nullopt : WIFI_STORE.findCredential(last);
-    if (!cred) {
+    const size_t n = std::min<size_t>(WIFI_STORE.getCredentialCount(), Job::kMaxCandidates);
+    for (size_t i = 0; i < n; ++i) {
+      if (const auto cred = WIFI_STORE.getCredentialAt(i)) up->candidates[up->nCandidates++] = {cred->ssid, cred->password};
+    }
+    up->lastSsid = WIFI_STORE.getLastConnectedSsid();
+    if (up->nCandidates == 0) {
       LOG_DBG("WX", "no saved wifi network; weather stays cached");
       forceRefresh_ = false;
       nextTryMs_ = millis() + kNoCredsRetryMs;
       return;
     }
-    up->ssid = cred->ssid;
-    up->pass = cred->password;
   }
 
   // Что качать: погода (если пора или просили), место по IP (если давно/сменился язык), годы календаря.
@@ -430,6 +481,9 @@ void WeatherClient::applyJob(Job& j, uint32_t nowEpoch) {
       if (holiday_core::YearData* slot = hol_.put(j.hol[i].year, cy)) *slot = j.hol[i].data;
       holDirty_ = true;
     }
+    // Подключились не к «последней использованной» сети — запомнить новую: и наши будущие циклы, и штатная
+    // тихая синхронизация времени (StandbyActivity::trySilentWifiConnect) читают именно это поле.
+    if (!j.connectedSsid.empty()) WIFI_STORE.setLastConnectedSsid(j.connectedSsid);
   }
   if (cacheDirty_) saveCache();
   if (holDirty_) saveHolidays();

@@ -64,6 +64,12 @@ class CalendarFace final : public StandbyFace {
   int monthOffset_ = 0;  // относительно текущего месяца
   uint32_t lastNavMs_ = 0;
   unsigned updatesSinceCleanup_ = 0;
+  // true — следующий render() должен попросить HALF_REFRESH вместо обычного FAST_REFRESH: экран целиком сменился
+  // (главный ⇄ вложенный, вложенный ⇄ вложенный) или подошло время планового «ухода отризеринга» (см. render()).
+  // StandbyActivity сама делает это только на Xteink-платах (gpio.isXteinkDevice()); Paper Mono под это не
+  // подпадает, поэтому грань просит перерисовку напрямую через GfxRenderer::requestNextRefresh() — обычный
+  // публичный метод рендерера, не хук.
+  bool wantGhostCleanup_ = false;
 
 
   cal_detail::State st_;    // какой экран открыт, страница, дата, год

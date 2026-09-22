@@ -382,6 +382,7 @@ bool CalendarFace::takeSnapshot(Snapshot& s) {
 void CalendarFace::onEnter() {
   monthOffset_ = 0;
   updatesSinceCleanup_ = 0;
+  wantGhostCleanup_ = false;
   lastNavMs_ = millis();
   lastInputMs_ = millis();
   st_ = cal_detail::State{};
@@ -416,7 +417,12 @@ void CalendarFace::onPageNext() { shiftMonth(+1); }
 
 // ---- Вложенные экраны: состояние и ввод ------------------------------------------------------------------------
 
-void CalendarFace::closeDetail() { st_.screen = cal_detail::Screen::Main; }
+void CalendarFace::closeDetail() {
+  // Возврат на главный экран — резкая смена содержимого (карточки/график/сетка → время и месяц); один FAST_REFRESH
+  // этого не отрисует чисто на этой панели, отсюда жалоба «остаётся остаточное изображение».
+  if (st_.screen != cal_detail::Screen::Main) wantGhostCleanup_ = true;
+  st_.screen = cal_detail::Screen::Main;
+}
 
 void CalendarFace::shiftDay(int days) {
   const int32_t z = calendar_core::daysFromCivil(st_.dayY, st_.dayM, st_.dayD) + days;
@@ -455,6 +461,7 @@ void CalendarFace::showMonth(int year, unsigned month) {
 void CalendarFace::applyHit(const cal_detail::Hit& h) {
   using cal_detail::Act;
   using cal_detail::Screen;
+  const Screen prevScreen = st_.screen;
   switch (h.act) {
     case Act::OpenWeather:
       st_.screen = Screen::Weather;
@@ -499,6 +506,8 @@ void CalendarFace::applyHit(const cal_detail::Hit& h) {
     case Act::None:
       break;
   }
+  // Тип экрана поменялся (главный ⇄ вложенный, «День» ⇄ «Погода» по тапу на карточке…) — так же резко, как и закрытие.
+  if (st_.screen != prevScreen) wantGhostCleanup_ = true;
 }
 
 bool CalendarFace::handleInput(MappedInputManager& input, bool /*immersive*/) {
@@ -625,11 +634,15 @@ StandbyFace::TickResult CalendarFace::tick() {
 
   if (snap_.dayKey != prevDay) {
     updatesSinceCleanup_ = 0;
+    // RedrawWithGhostCleanup доходит до HALF_REFRESH только на Xteink-платах (StandbyActivity сама решает так);
+    // на Paper Mono просим то же самое сами — см. wantGhostCleanup_ в render().
+    wantGhostCleanup_ = true;
     return TickResult::RedrawWithGhostCleanup;  // полночь: сетка и дата меняются целиком
   }
   if (snap_.minuteKey != prevMinute) {
     if (++updatesSinceCleanup_ >= calendar_config::kGhostCleanupEveryUpdates) {
       updatesSinceCleanup_ = 0;
+      wantGhostCleanup_ = true;  // плановая чистка: время и сегодняшняя плашка стоят на месте много минут подряд
       return TickResult::RedrawWithGhostCleanup;
     }
     return TickResult::Redraw;
@@ -648,6 +661,17 @@ uint32_t CalendarFace::secondsUntilNextWake() const {
 
 void CalendarFace::render(GfxRenderer& r, const Rect& vp) {
   renderer_ = &r;
+  if (wantGhostCleanup_) {
+    // StandbyActivity::render() вызывает r.displayBuffer() сразу после этого render() и без override берёт
+    // FAST_REFRESH; requestNextRefresh() — обычный публичный метод GfxRenderer (не хук), он подменит режим этого
+    // одного кадра на HALF_REFRESH, что на партиях чёрного (крупное время, плашка «сегодня», карточки вложенных
+    // экранов) чистит остаточное изображение, которое FAST_REFRESH не трогает. Тот же режим StandbyActivity сама
+    // использует для RedrawWithGhostCleanup на Xteink-платах — здесь просим его напрямую, потому что Paper Mono
+    // под тот путь не попадает (gpio.isXteinkDevice() == false).
+    r.requestNextRefresh(HalDisplay::HALF_REFRESH);
+    wantGhostCleanup_ = false;
+    LOG_DBG("STANDBY", "Calendar: HALF_REFRESH requested (ghost cleanup)");
+  }
   ensureDigitFonts(r);
   const Lang lang = currentLang();
   drawStatusRow(r, vp, (static_cast<int>(SETTINGS.clockUtcOffsetQ) - 48) * 15);

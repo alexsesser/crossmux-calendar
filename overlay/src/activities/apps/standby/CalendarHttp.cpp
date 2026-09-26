@@ -79,7 +79,7 @@ bool get(const Request& rq, std::string& out, Result& r) {
   req += "GET ";
   req += u.path;
   req += " HTTP/1.1\r\nHost: ";
-  req += rq.hostHeader ? rq.hostHeader : u.host.c_str();
+  req += u.host;
   req += "\r\nUser-Agent: ";
   req += calendar_config::kHttpUserAgent;
   req += "\r\nAccept: application/json\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n";

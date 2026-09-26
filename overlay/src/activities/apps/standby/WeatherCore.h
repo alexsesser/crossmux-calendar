@@ -40,11 +40,11 @@ bool samePlace(double lat1, double lon1, double lat2, double lon2);
 enum class Provider : uint8_t { OpenMeteo = 0, MetNo = 1 };
 const char* providerName(Provider p);  // «Open-Meteo.com» / «MET Norway»
 
-// Пути к погоде — пока какой-то не сработает (§13.9–13.10 концепции): Open-Meteo по HTTPS (сервер, который даёт DNS);
-// другие серверы Open-Meteo по IP (kOpenMeteoAltServers, обычный HTTP); тот же сервер обычным HTTP (если мешают только
-// шифрованию); MET Norway. Сработавший путь запоминается и пробуется первым в следующий раз.
-enum class Route : uint8_t { OpenMeteoHttps = 0, OpenMeteoHttp = 1, MetNo = 2, OpenMeteoAlt = 3 };
-constexpr int kRoutes = 4;
+// Пути к погоде — пока какой-то не сработает (§13.9–13.12 концепции): Open-Meteo по HTTPS; он же обычным HTTP (если
+// мешают только шифрованию); MET Norway. Серверы — только по именам (DNS). Сработавший путь запоминается и пробуется
+// первым в следующий раз.
+enum class Route : uint8_t { OpenMeteoHttps = 0, OpenMeteoHttp = 1, MetNo = 2 };
+constexpr int kRoutes = 3;
 const char* routeName(Route r);
 
 // Поле, которого нет, — NaN: интерфейс рисует заглушку именно для него, а не для всего блока.
@@ -135,8 +135,7 @@ constexpr uint32_t kExpireSec = calendar_config::kExpireHours * 3600u;
 int buildGeoUrl(calendar_core::Lang lang, char* buf, size_t size);
 // https=false — обычный HTTP; координаты тогда округляются до 0,01° (≈ 1 км: точнее для погоды не нужно, а запрос
 // идёт открытым текстом).
-// host — другой сервер (IP) вместо api.open-meteo.com; только для https=false (заголовок Host ставит клиент).
-int buildForecastUrl(double lat, double lon, char* buf, size_t size, bool https = true, const char* host = nullptr);
+int buildForecastUrl(double lat, double lon, char* buf, size_t size, bool https = true);
 // MET Norway Locationforecast 2.0 «complete» (без ключа; нужен User-Agent с контактом — kHttpUserAgent).
 int buildMetNoUrl(double lat, double lon, char* buf, size_t size);
 

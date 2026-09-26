@@ -33,7 +33,6 @@ struct Request {
   size_t maxBytes = 4096;          // потолок тела после распаковки
   uint32_t stageTimeoutMs = 10000; // на ответ сервера и паузы в данных
   uint32_t connectTimeoutMs = 5000; // на TCP-соединение и на TLS-рукопожатие
-  const char* hostHeader = nullptr; // заголовок Host, если в URL — IP-адрес сервера (другой сервер того же сайта)
   std::function<bool()> abort;     // true — бросить запрос (грань закрыта)
 };
 

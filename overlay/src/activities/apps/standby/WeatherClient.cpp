@@ -44,9 +44,6 @@ constexpr uint32_t kNoCredsRetryMs = calendar_config::kRetryNoWifiMin * 60u * 10
 constexpr uint32_t kLowBatteryRetryMs = calendar_config::kRetryLowBatteryMin * 60u * 1000u;
 constexpr uint32_t kHttpStageMs = calendar_config::kHttpStageTimeoutSec * 1000u;
 constexpr uint32_t kHttpConnectMs = calendar_config::kHttpConnectTimeoutSec * 1000u;
-constexpr size_t kAltServers = sizeof(calendar_config::kOpenMeteoAltServers) / sizeof(calendar_config::kOpenMeteoAltServers[0]);
-// С какого из других серверов Open-Meteo начинать: с того, что ответил в прошлый раз (до перезагрузки).
-std::atomic<unsigned> g_altFirst{0};
 // Потолки ответов (не настройки): больше — явно не то.
 constexpr size_t kMaxBody = 8192;          // место, Open-Meteo, календарь: сотни байт … 2 КБ
 constexpr size_t kMaxMetBody = 196608;     // MET Norway «complete»: ≈ 65 КБ JSON (по сети — ≈ 5 КБ gzip)
@@ -198,19 +195,17 @@ struct WeatherClient::Job {
   bool abandoned() const { return state.load(std::memory_order_acquire) == 2; }
   bool connectWifi();
   void releaseWifi();
-  bool fetch(const char* url, std::string& out, size_t maxBytes, const char* what, const char* hostHeader = nullptr,
-             cal_http::Stage* stage = nullptr);
+  bool fetch(const char* url, std::string& out, size_t maxBytes, const char* what, cal_http::Stage* stage = nullptr);
   bool fetchWeather(std::string& body, char* url, size_t urlSize);
 };
 
 bool WeatherClient::Job::fetch(const char* url, std::string& out, size_t maxBytes, const char* what,
-                               const char* hostHeader, cal_http::Stage* stage) {
+                               cal_http::Stage* stage) {
   cal_http::Request rq;
   rq.url = url;
   rq.maxBytes = maxBytes;
   rq.stageTimeoutMs = kHttpStageMs;
   rq.connectTimeoutMs = kHttpConnectMs;
-  rq.hostHeader = hostHeader;
   rq.abort = [this] { return abandoned(); };
   cal_http::Result r;
   const bool ok = cal_http::get(rq, out, r) && !out.empty();
@@ -224,8 +219,8 @@ bool WeatherClient::Job::fetch(const char* url, std::string& out, size_t maxByte
   return ok;
 }
 
-// Погода — по очереди разными путями (weather_core::Route), пока какой-то не сработает: Open-Meteo по HTTPS → другие
-// серверы Open-Meteo по IP → тот же сервер по HTTP → MET Norway. Первым — тот, что сработал в прошлый раз; но запасной
+// Погода — по очереди разными путями (weather_core::Route), пока какой-то не сработает: Open-Meteo по HTTPS → он же по
+// HTTP → MET Norway. Серверы — только по именам (DNS), без зашитых адресов. Первым — тот, что сработал в прошлый раз; но запасной
 // путь первым не дольше kWeatherPrimaryRetryMin — потом снова пробуем основной. Бюджет времени (kNetworkBudgetSec) внутри цепочки не проверяется: каждый путь и так
 // ограничен таймаутами этапов, а без погоды выход в сеть бессмыслен.
 bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSize) {
@@ -234,8 +229,6 @@ bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSi
     switch (r) {
       case Route::OpenMeteoHttps:
         return true;
-      case Route::OpenMeteoAlt:
-        return kAltServers > 0 && calendar_config::kOpenMeteoAltServers[0][0] != '\0';
       case Route::OpenMeteoHttp:
         return calendar_config::kWeatherHttpFallback;
       case Route::MetNo:
@@ -243,7 +236,7 @@ bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSi
     }
     return false;
   };
-  static constexpr Route kDefaultOrder[] = {Route::OpenMeteoHttps, Route::OpenMeteoAlt, Route::OpenMeteoHttp, Route::MetNo};
+  static constexpr Route kDefaultOrder[] = {Route::OpenMeteoHttps, Route::OpenMeteoHttp, Route::MetNo};
   Route first = route;
   const bool primaryDue = nowEpoch < routeAt || nowEpoch - routeAt >= calendar_config::kWeatherPrimaryRetryMin * 60u;
   if (!enabled(first) || (first != Route::OpenMeteoHttps && primaryDue)) first = Route::OpenMeteoHttps;
@@ -260,9 +253,9 @@ bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSi
     weather_core::Weather w;
     weather_core::Forecast f;
     bool parsed = false;
-    auto attempt = [&](const char* what, size_t maxBytes, const char* hostHeader, bool met) {
+    auto attempt = [&](const char* what, size_t maxBytes, bool met) {
       cal_http::Stage st = cal_http::Stage::Ok;
-      const bool got = fetch(url, body, maxBytes, what, hostHeader, &st);
+      const bool got = fetch(url, body, maxBytes, what, &st);
       if (r == Route::OpenMeteoHttps && st == cal_http::Stage::Tcp) mainIpDown = true;
       parsed = got && (met ? weather_core::parseMetNo(body.data(), body.size(), nowEpoch, target.lat, target.lon, utcOffsetSec, w, &f)
                            : weather_core::parseForecast(body.data(), body.size(), nowEpoch, w, &f));
@@ -272,15 +265,14 @@ bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSi
       std::string().swap(body);  // ответ MET — десятки КБ: не держим до конца задачи
       return parsed;
     };
-    char what[64];
     switch (r) {
       case Route::MetNo:
         weather_core::buildMetNoUrl(target.lat, target.lon, url, urlSize);
-        attempt("погода (MET Norway)", kMaxMetBody, nullptr, true);
+        attempt("погода (MET Norway)", kMaxMetBody, true);
         break;
       case Route::OpenMeteoHttps:
         weather_core::buildForecastUrl(target.lat, target.lon, url, urlSize, true);
-        attempt("погода (Open-Meteo)", kMaxBody, nullptr, false);
+        attempt("погода (Open-Meteo)", kMaxBody, false);
         break;
       case Route::OpenMeteoHttp:
         if (mainIpDown) {
@@ -288,20 +280,8 @@ bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSi
           continue;
         }
         weather_core::buildForecastUrl(target.lat, target.lon, url, urlSize, false);
-        attempt("погода (Open-Meteo по HTTP)", kMaxBody, nullptr, false);
+        attempt("погода (Open-Meteo по HTTP)", kMaxBody, false);
         break;
-      case Route::OpenMeteoAlt: {
-        const unsigned start = g_altFirst.load() % kAltServers;
-        for (size_t i = 0; i < kAltServers && !parsed && !abandoned(); ++i) {
-          const unsigned idx = static_cast<unsigned>((start + i) % kAltServers);
-          const char* ip = calendar_config::kOpenMeteoAltServers[idx];
-          if (!ip[0]) continue;
-          std::snprintf(what, sizeof(what), "погода (Open-Meteo, сервер %s)", ip);
-          weather_core::buildForecastUrl(target.lat, target.lon, url, urlSize, false, ip);
-          if (attempt(what, kMaxBody, "api.open-meteo.com", false)) g_altFirst.store(idx);
-        }
-        break;
-      }
     }
     if (!parsed) continue;
     w.atLat = target.lat;
@@ -760,7 +740,11 @@ bool WeatherClient::weatherDue(uint32_t nowEpoch) const {
   const weather_core::Weather& w = cache_.weather;
   if (!w.valid || w.fetchedEpoch == 0) return true;
   if (nowEpoch < w.fetchedEpoch) return true;  // часы «ушли назад» — данным нельзя верить
-  return nowEpoch - w.fetchedEpoch >= calendar_config::kWeatherRefreshMin * 60u;  // любой источник — одинаково
+  // MET Norway просит не спрашивать чаще, чем устаревает его ответ.
+  const unsigned everyMin = w.provider == weather_core::Provider::MetNo
+                                ? std::max(calendar_config::kWeatherRefreshMin, calendar_config::kMetNoMinRefreshMin)
+                                : calendar_config::kWeatherRefreshMin;
+  return nowEpoch - w.fetchedEpoch >= everyMin * 60u;
 }
 
 // Есть ли что догрузить из производственного календаря: год, который смотрит пользователь, либо предзагрузка

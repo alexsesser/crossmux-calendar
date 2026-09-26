@@ -76,6 +76,7 @@ class WeatherClient {
   // Обновить погоду сейчас (кнопка Confirm на экране «Погода»): не ждёт ни паузы без ввода, ни таймера повтора.
   void requestRefresh() { forceRefresh_ = true; }
   bool refreshing() const { return forceRefresh_ || wxInJob_; }  // погода сейчас загружается
+  bool ready() const { return loaded_; }  // кэш и настройки прочитаны с SD
 
  private:
   struct Job;  // данные задачи: вход, результат, флаг готовности (см. .cpp)

@@ -5,6 +5,8 @@
 #include <I18n.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "CalendarConfig.h"

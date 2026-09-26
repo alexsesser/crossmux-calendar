@@ -862,7 +862,8 @@ StandbyFace::TickResult CalendarFace::tick() {
   }
 
   // Раз в 10 минут — состояние в журнал: видно, что устройство живо, чем заряжено, что с Wi-Fi и погодой.
-  if (cal_log::enabled() && (lastBeatMs_ == 0 || millis() - lastBeatMs_ >= 10u * 60u * 1000u)) {
+  // Первая — когда кэш уже прочитан (иначе «погоде -1 мин» при каждом открытии).
+  if (cal_log::enabled() && weather_.ready() && (lastBeatMs_ == 0 || millis() - lastBeatMs_ >= 10u * 60u * 1000u)) {
     lastBeatMs_ = millis();
     const auto& w = weather_.cache().weather;
     const long age = (w.valid && snap_.epoch >= w.fetchedEpoch) ? static_cast<long>((snap_.epoch - w.fetchedEpoch) / 60) : -1;

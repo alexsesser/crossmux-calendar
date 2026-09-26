@@ -205,6 +205,8 @@ void pump(bool forceFlush, bool lockHeld) {
   }
   if (!pending) return;
   if (forceFlush || pending >= kFlushAt || now - g_lastFlushMs >= calendar_config::kSdLogFlushSec * 1000u) {
+    // Плановая запись не ждёт, пока панель обновляется (RenderLock занят рендером): иначе стоит весь главный цикл.
+    if (!forceFlush && !lockHeld && RenderLock::peek()) return;
     g_lastFlushMs = now;
     flush(lockHeld);
   }

@@ -658,7 +658,8 @@ struct Card {
 };
 Card beginCard(GfxRenderer& r, int x, int y, int w, const char* caption) {
   Card k{x, y, w, y + 6};
-  r.drawText(kFontSmall, x + 12, k.cy, caption, true, kBold);
+  const Fit cap(r, kFontSmall, caption, w - 24, kBold);  // длинная подпись места не вылезает за рамку
+  r.drawText(kFontSmall, x + 12, k.cy, cap.c_str(), true, kBold);
   k.cy += lineH(r, kFontSmall) + 2;
   return k;
 }

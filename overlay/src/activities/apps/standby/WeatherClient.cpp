@@ -100,6 +100,21 @@ const char* wlName(int st) {
   }
 }
 
+// Счётчики отказов во время нашей попытки подключения (их пишет обработчик событий Wi-Fi — другая задача). Точка не
+// найдена или не пускает (пароль) — драйвер повторяет каждые ≈ 2,4 с до конца таймаута; ждать его незачем.
+std::atomic<int> g_noApEvents{0};
+std::atomic<int> g_authFailEvents{0};
+
+#if CROSSPOINT_EMULATED == 0
+bool isNoApReason(unsigned r) {
+  return r == WIFI_REASON_NO_AP_FOUND || (r >= 210 && r <= 212);  // 210–212: «не найдена с подходящей защитой/порогами»
+}
+bool isAuthFailReason(unsigned r) {
+  return r == WIFI_REASON_AUTH_FAIL || r == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT || r == WIFI_REASON_HANDSHAKE_TIMEOUT ||
+         r == WIFI_REASON_AUTH_EXPIRE;
+}
+#endif
+
 // Причины обрыва Wi-Fi (коды ESP-IDF) — в журнал: подписываемся на события Wi-Fi один раз за загрузку.
 void watchWifiEvents() {
 #if CROSSPOINT_EMULATED == 0
@@ -116,6 +131,8 @@ void watchWifiEvents() {
       }
       case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
         const auto& d = info.wifi_sta_disconnected;
+        if (isNoApReason(d.reason)) ++g_noApEvents;
+        if (isAuthFailReason(d.reason)) ++g_authFailEvents;
         cal_log::line("WIFI", "событие: отключение от «%.*s», причина %u (%s), сигнал %d дБм", static_cast<int>(d.ssid_len),
                       reinterpret_cast<const char*>(d.ssid), static_cast<unsigned>(d.reason),
                       WiFi.disconnectReasonName(static_cast<wifi_err_reason_t>(d.reason)), static_cast<int>(d.rssi));
@@ -379,13 +396,20 @@ bool WeatherClient::Job::connectWifi() {
   }
   WiFi.scanDelete();
 
-  // Порядок попыток: видимые запомненные — от сильного сигнала к слабому.
+  // Порядок попыток: последняя сеть, к которой удалось подключиться (если видна), затем остальные видимые запомненные —
+  // от сильного сигнала к слабому. Без первого правила дома календарь выбирал точку доступа телефона, если она чуть
+  // сильнее домашней сети (журнал 26.09.2026: «alexsesser» −60 против «rudneva» −66 — и 15 с впустую).
   unsigned order[kMaxCandidates];
   unsigned nOrder = 0;
   for (unsigned c = 0; c < nCandidates; ++c) {
     if (seen[c]) order[nOrder++] = c;
   }
-  std::sort(order, order + nOrder, [&](unsigned a, unsigned b) { return best[a] > best[b]; });
+  std::sort(order, order + nOrder, [&](unsigned a, unsigned b) {
+    const bool la = !lastSsid.empty() && candidates[a].ssid == lastSsid;
+    const bool lb = !lastSsid.empty() && candidates[b].ssid == lastSsid;
+    if (la != lb) return la;
+    return best[a] > best[b];
+  });
   std::string savedList;
   for (unsigned k = 0; k < nOrder; ++k) {
     char one[48];
@@ -411,10 +435,13 @@ bool WeatherClient::Job::connectWifi() {
     const Candidate& cd = candidates[order[a]];
     const bool enterprise = !cd.pass.empty() && cd.pass[0] == calmod_wifi::kSep;
     const uint32_t a0 = millis();
+    g_noApEvents = 0;
+    g_authFailEvents = 0;
     calmod_wifi::begin(cd.ssid.c_str(), cd.pass.c_str());  // обычный пароль, открытая сеть или логин+пароль (PEAP)
     const uint32_t limit = calmod_wifi::timeoutMs(kConnectTimeoutMs);  // Enterprise — дольше
     wl_status_t st = WL_IDLE_STATUS;
     bool ok = false;
+    const char* gaveUp = nullptr;
     for (;;) {
       delay(100);
       st = WiFi.status();
@@ -427,6 +454,15 @@ bool WeatherClient::Job::connectWifi() {
       // Статус Arduino меняют события, и сразу после begin() он может быть ещё от прошлой попытки: отказу верим не
       // раньше kStatusGraceMs, до того просто ждём.
       if (el >= kStatusGraceMs && (st == WL_CONNECT_FAILED || st == WL_NO_SSID_AVAIL)) break;
+      // Драйвер сам повторяет попытки до таймаута, но если точка дважды «не найдена» или трижды не пустила — хватит.
+      if (g_noApEvents >= 2) {
+        gaveUp = "точка доступа не отвечает (NO_AP_FOUND)";
+        break;
+      }
+      if (g_authFailEvents >= 3) {
+        gaveUp = "точка не пускает (пароль?)";
+        break;
+      }
     }
     const unsigned long el = millis() - a0;
     if (ok) {
@@ -436,8 +472,9 @@ bool WeatherClient::Job::connectWifi() {
       ourSsid = cd.ssid;
       return true;
     }
-    cal_log::line("WIFI", "«%s»%s: не подключилось за %lu мс из %lu (статус %d: %s)", cd.ssid.c_str(),
-                  enterprise ? " (Enterprise)" : "", el, static_cast<unsigned long>(limit), static_cast<int>(st), wlName(st));
+    cal_log::line("WIFI", "«%s»%s: не подключилось за %lu мс из %lu (статус %d: %s)%s%s", cd.ssid.c_str(),
+                  enterprise ? " (Enterprise)" : "", el, static_cast<unsigned long>(limit), static_cast<int>(st), wlName(st),
+                  gaveUp ? " — " : "", gaveUp ? gaveUp : "");
     WiFi.disconnect(false, true);
     delay(200);
   }
@@ -884,7 +921,13 @@ bool WeatherClient::due(uint32_t nowEpoch) const {
 
 bool WeatherClient::step(GfxRenderer* renderer, uint32_t nowEpoch, calendar_core::Lang lang) {
   bool changed = false;
+  // SD и данные для render() — под RenderLock, а его держит задача рендера всё время обновления панели (быстрое —
+  // доли секунды, полная очистка — больше секунды). Ждать его здесь — значит стоять всему главному циклу вместе с
+  // кнопками (журнал: 1,2 с при каждом открытии календаря). Поэтому несрочное — только когда блокировка свободна;
+  // иначе — на следующем такте (они идут сотнями в секунду).
+  const bool lockBusy = RenderLock::peek();
   if (!loaded_) {
+    if (lockBusy) return changed;
     loaded_ = true;
     nextTryMs_ = millis() + kFirstDelayMs;
     loadSettings();
@@ -897,12 +940,12 @@ bool WeatherClient::step(GfxRenderer* renderer, uint32_t nowEpoch, calendar_core
     }
     changed = true;
   }
-  if (settingsDirty_) saveSettings();
-  if (cacheDirty_ && !job_) saveCache();  // место сменили с экрана «Место»: погода сброшена — сохранить это
+  if (settingsDirty_ && !lockBusy) saveSettings();
+  if (cacheDirty_ && !job_ && !lockBusy) saveCache();  // место сменили с экрана «Место»: погода сброшена — сохранить это
   if (!nowEpoch) return changed;
 
   if (job_) {  // задача идёт: смотрим только флаг готовности
-    if (job_->state.load(std::memory_order_acquire) == 1) {
+    if (job_->state.load(std::memory_order_acquire) == 1 && !lockBusy) {
       Job* j = job_;
       job_ = nullptr;
       applyJob(*j, nowEpoch);

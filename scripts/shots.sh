@@ -10,6 +10,8 @@
 #   docs        кадры для README: Москва (мок геолокации и прогноза) + живой календарь праздников
 #   docs_place  кадр экрана «Место» для README (подложенные данные, поиск города — мок)
 #   hang        сеть «зависла» (прокси в никуда): экран и тапы должны работать, пока сетевая задача ждёт
+#   ui          кнопка «Обновить», значки над почасовой таблицей, тап по городу → «Место» с сохранёнными местами,
+#               прошедший день с архивом погоды, ландшафт (мок: прогноз и архив из tests/data)
 #   fallback    Open-Meteo недоступен ни по HTTPS, ни по HTTP → погода от MET Norway (мок: настоящий gzip-ответ на 26.09.2026)
 #   holidays_offline нет сети и календаря: май 2026 и 2027 — только выходные и фиксированные праздники
 #   detail_land то же в ландшафте (погода ×2, день, год)
@@ -75,6 +77,19 @@ for s in "${SCENARIOS[@]}"; do
       wifi_saved; cache_clear; mkdir -p "$OUT/mock"; cp "$ROOT/tests/data/openmeteo_moscow_7d.json" "$OUT/mock/forecast"
       CROSSPOINT_SIM_HTTP_MOCK_ROOT="$OUT/mock" https_proxy=$DEAD_PROXY HTTPS_PROXY=$DEAD_PROXY \
         standby 13000 "12000:$OUT/wx_moscow.bmp" ;;
+    ui)
+      wifi_saved; cache_clear; rm -f "$FS/calendar_history.json"; mkdir -p "$OUT/mock_ui"; rm -f "$OUT/mock_ui"/*
+      cp "$ROOT/tests/data/metno_moscow_complete.json.gz" "$OUT/mock_ui/complete"  # прогноз на 26.09.2026 — часы видны в этот день
+      cp "$ROOT/tests/data/archive_moscow.json" "$OUT/mock_ui/archive"
+      echo '{"v":1,"auto":true,"log":true,"manual":{"city":"Москва","lat":55.7558,"lon":37.6173},"saved":[{"city":"Дача","lat":56.12,"lon":38.25},{"city":"Нижний Новгород","lat":56.3287,"lon":44.002},{"city":"Москва","lat":55.7558,"lon":37.6173}]}' > "$FS/calendar_settings.json"
+      CROSSPOINT_SIM_HTTP_MOCK_ROOT="$OUT/mock_ui" https_proxy=$DEAD_PROXY HTTPS_PROXY=$DEAD_PROXY http_proxy=$DEAD_PROXY \
+        run "1500:BACK;9500:TAP:240,330;12000:TAP:70,742;15000:BACK;16000:TAP:60,275;18500:BACK;19500:TAP:122,675;28000:QUIT" \
+          "9000:$OUT/ui_main.bmp;11500:$OUT/ui_weather.bmp;12400:$OUT/ui_refreshing.bmp;18000:$OUT/ui_place.bmp;27000:$OUT/ui_day_past.bmp"
+      set_orientation 3
+      CROSSPOINT_SIM_HTTP_MOCK_ROOT="$OUT/mock_ui" https_proxy=$DEAD_PROXY HTTPS_PROXY=$DEAD_PROXY \
+        run "1500:BACK;12000:QUIT" "11000:$OUT/ui_land_main.bmp"
+      set_orientation 0
+      rm -f "$FS/calendar_settings.json" ;;
     fallback)
       wifi_saved; cache_clear; mkdir -p "$OUT/mock_fb"; rm -f "$OUT/mock_fb"/*
       cp "$ROOT/tests/data/metno_moscow_complete.json.gz" "$OUT/mock_fb/complete"

@@ -33,6 +33,9 @@ namespace {
 constexpr const char* kCachePath = "/.crosspoint/calendar_cache.json";
 constexpr const char* kHolidaysPath = "/.crosspoint/calendar_holidays.json";
 constexpr const char* kSettingsPath = "/.crosspoint/calendar_settings.json";
+constexpr const char* kHistoryPath = "/.crosspoint/calendar_history.json";
+constexpr uint32_t kHistIdleMs = 1500;  // архив — после паузы в листании дней (соседние дни приходят тем же ответом)
+constexpr int kHistSpan = 3;           // сколько дней до и после нужного брать одним запросом
 
 // Тайминги — в CalendarConfig.h.
 constexpr uint32_t kFirstDelayMs = calendar_config::kFirstRequestDelaySec * 1000u;
@@ -161,6 +164,7 @@ struct WeatherClient::Job {
   unsigned nYears = 0;
   int years[kMaxYearsPerJob] = {};
   char searchQuery[64] = "";    // непусто — найти город по названию
+  int32_t histFrom = 0, histTo = 0;  // архив погоды за эти даты (0 — не нужен)
 
   // Результат.
   bool netOk = true;        // сеть в целом отвечала
@@ -183,6 +187,9 @@ struct WeatherClient::Job {
   bool holFailed = false;   // хотя бы один год не скачался — повторим позже
   int searchResult = -2;    // -2 — не искали (нет сети); -1 — не удалось; 0.. — сколько нашли
   weather_core::GeoHit hits[weather_core::kMaxGeoHits];
+  weather_core::HistDay histOut[2 * kHistSpan + 1];
+  int nHistOut = 0;
+  bool histTried = false;
   std::string ourSsid;      // к какой сети подключились сами: applyJob() запомнит её как последнюю
 
   // 0 — работает; 1 — готово, владелец грань; 2 — брошено гранью, владелец задача.
@@ -520,6 +527,25 @@ void WeatherClient::Job::run() {
       }
     }
 
+    // Архив погоды — сразу после поиска: его тоже ждут на экране.
+    if (histFrom && !abandoned()) {
+      histTried = true;
+      cal_http::Stage st = cal_http::Stage::Ok;
+      bool got = false;
+      for (int k = 0; k < 2 && !got && !abandoned(); ++k) {  // HTTPS, потом HTTP (если сервер вообще доступен)
+        if (k == 1 && (st == cal_http::Stage::Tcp || st == cal_http::Stage::Dns)) break;
+        weather_core::buildArchiveUrl(target.lat, target.lon, histFrom, histTo, url, sizeof(url), k == 0);
+        got = fetch(url, body, kMaxBody, k == 0 ? "архив погоды" : "архив погоды (HTTP)", &st);
+      }
+      if (got) {
+        nHistOut = weather_core::parseArchive(body.data(), body.size(), target.lat, target.lon, nowEpoch, histOut,
+                                              2 * kHistSpan + 1);
+        cal_log::line("HIST", "архив %d…%d для %s: %d дн.", static_cast<int>(histFrom), static_cast<int>(histTo),
+                      target.city, nHistOut);
+        if (nHistOut < 0) nHistOut = 0;
+      }
+    }
+
     if (doWeather && !abandoned()) {
       wxTried = true;
       // Вся цепочка путей — один «запрос» для счёта неудач подряд.
@@ -621,6 +647,70 @@ void WeatherClient::saveHolidays() {
   holDirty_ = false;
 }
 
+void WeatherClient::loadHistory() {
+  std::string body;
+  {
+    RenderLock lock;
+    if (!Storage.exists(kHistoryPath)) return;
+    String s = Storage.readFile(kHistoryPath);
+    body.assign(s.c_str(), s.length());
+  }
+  weather_core::HistStore hs;
+  if (!weather_core::parseHistory(body.data(), body.size(), hs)) {
+    cal_log::line("CACHE", "история погоды не читается — начинаю с нуля");
+    return;
+  }
+  RenderLock lock;
+  hist_ = hs;
+}
+
+void WeatherClient::saveHistory() {
+  const std::string s = weather_core::serializeHistory(hist_);
+  RenderLock lock;
+  Storage.ensureDirectoryExists("/.crosspoint");
+  if (!Storage.writeFile(kHistoryPath, String(s.c_str()))) cal_log::line("CACHE", "не удалось записать историю погоды");
+  histDirty_ = false;
+}
+
+void WeatherClient::wantHistory(int32_t date, int32_t today) {
+  histToday_ = today;
+  if (date >= today || date < 19400101) {  // архив Open-Meteo — с 1940 года
+    histWant_ = 0;
+    histQueued_ = false;
+    return;
+  }
+  const weather_core::HistDay* h = hist_.find(date, cache_.place.lat, cache_.place.lon);
+  if (h && h->src == weather_core::HistSource::Archive) {
+    histWant_ = 0;
+    histQueued_ = false;
+    return;
+  }
+  if (date == histFailed_ && millis() - histFailedMs_ < kFailRetryMs) return;  // не долбим: недавно не удалось
+  if (date == histWant_ && (histQueued_ || histInJob_)) return;
+  histWant_ = date;
+  histQueued_ = true;
+}
+
+WeatherClient::Hist WeatherClient::historyState(int32_t date) const {
+  if (date == histWant_ && (histQueued_ || histInJob_)) return Hist::Waiting;
+  if (date == histFailed_) return Hist::Failed;
+  return Hist::None;
+}
+
+void WeatherClient::pickSaved(int i) {
+  if (i < 0 || i >= settings_.nSaved) return;
+  const weather_core::Place p = settings_.saved[i];
+  clearSearch();
+  setManualPlace(p);
+}
+
+void WeatherClient::removeSaved(int i) {
+  if (i < 0 || i >= settings_.nSaved) return;
+  cal_log::line("PLACE", "убрано из сохранённых: %s", settings_.saved[i].city);
+  weather_core::removeSaved(settings_, i);
+  settingsDirty_ = true;
+}
+
 void WeatherClient::loadSettings() {
   std::string body;
   {
@@ -691,6 +781,7 @@ void WeatherClient::setManualPlace(const weather_core::Place& p) {
   settings_.manual.ipEpoch = 0;
   settings_.manual.ssid[0] = '\0';
   settings_.autoLocation = false;
+  weather_core::addSaved(settings_, settings_.manual);
   settingsDirty_ = true;
   cal_log::line("PLACE", "место вручную: %s (%.4f, %.4f)", p.city, p.lat, p.lon);
   applyEffectivePlace();
@@ -764,6 +855,7 @@ bool WeatherClient::holidayWorkPending(uint32_t nowEpoch) const {
 bool WeatherClient::due(uint32_t nowEpoch) const {
   // Явная просьба пользователя (обновить, найти город, включить «Авто») — без таймеров и пауз.
   if (forceRefresh_ || searchQueued_ || forceGeo_) return true;
+  if (histQueued_ && idleMs_ >= kHistIdleMs) return true;  // архив для открытого дня — после паузы в листании
   if (static_cast<int32_t>(millis() - nextTryMs_) < 0) return false;
   // Тихий период: пока идёт ввод — не начинаем (не нагружаем Wi-Fi/процессор посреди листания).
   const uint32_t needIdleMs = detailOpen_ ? calendar_config::kDetailNetworkIdleSec * 1000u : calendar_config::kOnDemandDebounceMs;
@@ -779,6 +871,7 @@ bool WeatherClient::step(GfxRenderer* renderer, uint32_t nowEpoch, calendar_core
     loadSettings();
     loadCache();
     loadHolidays();
+    loadHistory();
     {
       RenderLock lock;
       applyEffectivePlace();
@@ -815,7 +908,7 @@ void WeatherClient::startJob(GfxRenderer& renderer, uint32_t nowEpoch, calendar_
     nextTryMs_ = millis() + 2000;
     return;
   }
-  const bool urgent = forceRefresh_ || searchQueued_ || forceGeo_;
+  const bool urgent = forceRefresh_ || searchQueued_ || forceGeo_ || histQueued_;
 
   // Мало заряда — плановые запросы пропускаем (явную просьбу — выполняем).
   const int battery = powerManager.getBatteryPercentage();
@@ -868,6 +961,11 @@ void WeatherClient::startJob(GfxRenderer& renderer, uint32_t nowEpoch, calendar_
         searchQueued_ = false;
         search_ = Search::Failed;
       }
+      if (histQueued_) {
+        histQueued_ = false;
+        histFailed_ = histWant_;
+        histFailedMs_ = millis();
+      }
       nextTryMs_ = millis() + kNoCredsRetryMs;
       return;
     }
@@ -900,7 +998,19 @@ void WeatherClient::startJob(GfxRenderer& renderer, uint32_t nowEpoch, calendar_
     add(wantYear_);  // год, который смотрит пользователь, — первым
     for (int y = cy; y <= cy + static_cast<int>(calendar_config::kHolidayPrefetchYears); ++y) add(y);
   }
-  if (!j.doWeather && j.nYears == 0 && !j.searchQuery[0] && !j.forceGeo) {  // делать нечего
+  if (histQueued_ && histWant_) {
+    auto shift = [](int32_t date, int delta) {
+      int y;
+      unsigned m, d;
+      calendar_core::civilFromDays(calendar_core::daysFromCivil(date / 10000, static_cast<unsigned>(date / 100 % 100),
+                                                                static_cast<unsigned>(date % 100)) + delta, y, m, d);
+      return y * 10000 + static_cast<int32_t>(m) * 100 + static_cast<int32_t>(d);
+    };
+    j.histFrom = shift(histWant_, -kHistSpan);
+    const int32_t to = shift(histWant_, kHistSpan), yesterday = shift(histToday_, -1);
+    j.histTo = to < yesterday ? to : yesterday;
+  }
+  if (!j.doWeather && j.nYears == 0 && !j.searchQuery[0] && !j.forceGeo && !j.histFrom) {  // делать нечего
     forceRefresh_ = false;
     forceGeo_ = false;
     return;
@@ -931,6 +1041,9 @@ void WeatherClient::startJob(GfxRenderer& renderer, uint32_t nowEpoch, calendar_
     return;
   }
   job_ = raw;
+  histInJob_ = raw->histFrom != 0;
+  wxInJob_ = weatherJob;
+  histQueued_ = false;
   if (weatherJob) forceRefresh_ = false;
   forceGeo_ = false;
   searchQueued_ = false;
@@ -966,6 +1079,42 @@ void WeatherClient::applyJob(Job& j, uint32_t nowEpoch) {
         cal_log::line("WX", "погода получена для прежнего места — не показываю (место сменили, пока шёл запрос)");
       }
     }
+    wxInJob_ = false;
+    if (j.histFrom) {
+      bool gotWanted = false;
+      for (int i = 0; i < j.nHistOut; ++i) {
+        hist_.put(j.histOut[i]);
+        gotWanted = gotWanted || j.histOut[i].date == histWant_;
+      }
+      if (j.nHistOut > 0) histDirty_ = true;
+      if (!gotWanted && histWant_ >= j.histFrom && histWant_ <= j.histTo) {  // не дошло до запроса (нет Wi-Fi), сервер не ответил или дня в архиве ещё нет
+        histFailed_ = histWant_;
+        histFailedMs_ = millis();
+      }
+      histInJob_ = false;
+    }
+    // Своя запись: последний прогноз на сегодня. Когда день пройдёт, он останется в истории — даже если архив из этой
+    // сети недоступен.
+    if (j.wxOk && j.fcOk && j.nf.nDays > 0 &&
+        weather_core::samePlace(j.nw.atLat, j.nw.atLon, cache_.place.lat, cache_.place.lon)) {
+      const weather_core::FcDay& d0 = j.nf.d[0];
+      int y;
+      unsigned m, d;
+      calendar_core::civilFromDays(static_cast<int32_t>((static_cast<int64_t>(d0.ts) + j.nf.utcOffsetSec) / 86400), y, m, d);
+      weather_core::HistDay h;
+      h.date = y * 10000 + static_cast<int32_t>(m) * 100 + static_cast<int32_t>(d);
+      h.lat = static_cast<float>(cache_.place.lat);
+      h.lon = static_cast<float>(cache_.place.lon);
+      h.tMax = d0.tMax;
+      h.tMin = d0.tMin;
+      h.mm = d0.precipMm;
+      h.wind = d0.windMax;
+      h.code = d0.code;
+      h.src = weather_core::HistSource::Recorded;
+      h.savedAt = nowEpoch;
+      hist_.put(h);
+      histDirty_ = true;
+    }
     for (unsigned i = 0; i < j.nHol; ++i) {
       if (holiday_core::YearData* slot = hol_.put(j.hol[i].year, cy)) *slot = j.hol[i].data;
       holDirty_ = true;
@@ -989,6 +1138,7 @@ void WeatherClient::applyJob(Job& j, uint32_t nowEpoch) {
   if (cacheDirty_) saveCache();
   if (holDirty_) saveHolidays();
   if (settingsDirty_) saveSettings();
+  if (histDirty_) saveHistory();
 
   const bool wxFailed = j.wxTried && !j.wxOk;
   nextTryMs_ = millis() + ((wxFailed || !j.netOk) ? kFailRetryMs : 0u);
@@ -1006,6 +1156,10 @@ void WeatherClient::stop(bool lockHeld) {
     if (!job_->state.compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) delete job_;
     job_ = nullptr;
   }
+  histInJob_ = false;
+  wxInJob_ = false;
+  histQueued_ = false;
+  histWant_ = 0;
   if (settingsDirty_) saveSettings(lockHeld);  // переключили на экране «Место» и сразу вышли
   loaded_ = false;  // при следующем входе в грань перечитаем кэш и настройки
 }

@@ -54,8 +54,6 @@ struct Txt {
   const char* sevenDays;
   const char* noFcHint;
   const char* hourly;    // «сегодня»-страница: заголовок по часам
-  const char* cap;       // подпись под графиком
-  const char* capMm;     // она же, когда столбики — количество осадков (MET Norway: вероятности нет)
   // Экран «Место». Без «—» и «…»: этих знаков нет во всех подмножествах шрифта (см. kDash).
   const char* placeTitle;
   const char* modeAuto;
@@ -72,32 +70,48 @@ struct Txt {
   const char* logOn;
   const char* logOff;
   const char* logHint;   // %s папка
+  const char* coordsBtn;
+  const char* savedTitle;
+  const char* notCoords;  // %s ввод
+  const char* histArchive;
+  const char* histRecorded;
+  const char* histLoading;
+  const char* histFailed;
+  const char* histNone;
+  const char* refresh;
+  const char* refreshing;
 };
 
 const Txt kRu = {"Назад", "Сегодня", "сегодня", "завтра", "вчера", "через %d дн.", "%d дн. назад", "День",
                  "Солнце", "Луна", "Погода", "освещена %d %%", "лунный день %d", "Полнолуние", "новолуние",
                  "%c%d мин к вчера", "Прогноз доступен на 7 дней вперёд", "7 дней",
                  "Загрузится при подключении к Wi-Fi", "сегодня",
-                 "Температура · осадки % · ночь", "Температура · осадки мм · ночь",
                  "Место", "Авто (по IP)", "Вручную", "По IP", "ещё не определялось", "сеть «%s» · %s",
                  "Взять этот город", "Найти город", "Ищу «%s»...", "Выберите город:", "Не найдено: «%s»",
-                 "Поиск не удался: нет сети?", "Журнал на SD: вкл", "Журнал на SD: выкл", "%s"};
+                 "Поиск не удался: нет сети?", "Журнал на SD: вкл", "Журнал на SD: выкл", "%s",
+                 "Координаты", "Сохранённые:", "Не координаты: «%s»", "Архив Open-Meteo",
+                 "Сохранённый прогноз", "Загружаю архив погоды...", "Архив недоступен: нет связи",
+                 "Нет данных за этот день", "Обновить", "Обновляю..."};
 const Txt kEn = {"Back", "Today", "today", "tomorrow", "yesterday", "in %d days", "%d days ago", "Day",
                  "Sun", "Moon", "Weather", "%d %% lit", "lunar day %d", "Full moon", "new moon",
                  "%c%d min vs yesterday", "Forecast covers the next 7 days", "7 days",
                  "Loads when Wi-Fi is available", "today",
-                 "Temp. · rain % · night", "Temp. · rain mm · night",
                  "Location", "Auto (by IP)", "Manual", "By IP", "not detected yet", "network \"%s\" · %s",
                  "Use this city", "Find city", "Searching \"%s\"...", "Pick a city:", "Not found: \"%s\"",
-                 "Search failed: no network?", "SD log: on", "SD log: off", "%s"};
+                 "Search failed: no network?", "SD log: on", "SD log: off", "%s",
+                 "Coordinates", "Saved:", "Not coordinates: \"%s\"", "Open-Meteo archive",
+                 "Saved forecast", "Loading weather archive...", "Archive unavailable: no connection",
+                 "No data for this day", "Refresh", "Updating..."};
 const Txt kDe = {"Zurück", "Heute", "heute", "morgen", "gestern", "in %d Tagen", "vor %d Tagen", "Tag",
                  "Sonne", "Mond", "Wetter", "%d %% hell", "Mondtag %d", "Vollmond", "Neumond",
                  "%c%d Min zu gestern", "Vorhersage für die nächsten 7 Tage", "7 Tage",
                  "Wird bei WLAN geladen", "heute",
-                 "Temp. · Regen % · Nacht", "Temp. · Regen mm · Nacht",
                  "Ort", "Auto (per IP)", "Manuell", "Per IP", "noch nicht ermittelt", "Netz \"%s\" · %s",
                  "Diesen Ort nehmen", "Ort suchen", "Suche \"%s\"...", "Ort wählen:", "Nicht gefunden: \"%s\"",
-                 "Suche fehlgeschlagen: kein Netz?", "SD-Log: an", "SD-Log: aus", "%s"};
+                 "Suche fehlgeschlagen: kein Netz?", "SD-Log: an", "SD-Log: aus", "%s",
+                 "Koordinaten", "Gespeichert:", "Keine Koordinaten: \"%s\"", "Open-Meteo-Archiv",
+                 "Gespeicherte Vorhersage", "Lade Wetterarchiv...", "Archiv nicht erreichbar",
+                 "Keine Daten für diesen Tag", "Aktualisieren", "Lade..."};
 
 const Txt& txt(Lang l) { return l == Lang::Ru ? kRu : l == Lang::De ? kDe : kEn; }
 
@@ -237,8 +251,12 @@ void fmtUpdatedLine(char* out, size_t n, const Ctx& c, const WxView& v, Lang lan
   }
   // Источник — обязательная подпись по лицензиям (CC BY 4.0) и Open-Meteo, и MET Norway.
   const weather_core::Provider src = c.wx.fc.valid ? c.wx.fc.provider : c.wx.weather.provider;
-  std::snprintf(out, n, "%s %s  \xC2\xB7  %s", (v.stale || v.expired) ? WL.stale : WL.updated, when,
-                weather_core::providerName(src));
+  // «обн.» не пишем: рядом кнопка «Обновить»; устаревшие данные — с пометкой.
+  if (v.stale || v.expired) {
+    std::snprintf(out, n, "%s %s \xC2\xB7 %s", WL.stale, when, weather_core::providerName(src));
+  } else {
+    std::snprintf(out, n, "%s \xC2\xB7 %s", when, weather_core::providerName(src));
+  }
 }
 
 // Восход/закат/длина дня строкой из значков (офлайн).
@@ -374,6 +392,19 @@ void drawHourGraph(GfxRenderer& r, int x, int y, int w, int h, const weather_cor
   }
 }
 
+// Шапка почасовой таблицы значками над колонками (как в «7 днях»): t° — температура, капля — осадки (% или мм), ветер.
+// Координаты колонок — те же, что в drawHourTable. Возвращает высоту.
+int drawHourTableHeader(GfxRenderer& r, int x, int y, int w) {
+  const int nf = kFontSmall;
+  r.drawText(nf, x + w * 38 / 100, y, "t\xC2\xB0", true, kBold);
+  auto rightAt = [&](Glyph g, int right) { return right - (glyphTextW(r, nf, g, "") - 4); };
+  drawGlyphText(r, nf, Glyph::Drop, rightAt(Glyph::Drop, x + w - 96), y, "");
+  drawGlyphText(r, nf, Glyph::Wind, rightAt(Glyph::Wind, x + w - 8), y, "");
+  const int h = std::max(glyphSize(r, nf), lineH(r, nf)) + 4;
+  r.drawLine(x, y + h - 2, x + w, y + h - 2, 1, true);
+  return h + 2;
+}
+
 // Таблица каждые 3 часа. Первая строка — ближайший час, в рамке.
 void drawHourTable(GfxRenderer& r, int x, int y, int w, int rowH, const weather_core::FcHour* hs, int n, int offSec,
                    const Ctx& c) {
@@ -436,11 +467,9 @@ void drawWeatherToday(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T
     }
     const int graphH = 170;
     drawHourGraph(r, x, y, w, graphH, hs, n, fc.utcOffsetSec);
-    y += graphH + 2;
-    const Fit cap(r, kFontSmall, fc.provider == weather_core::Provider::MetNo ? T.capMm : T.cap, w);
-    drawCentered(r, kFontSmall, x, w, y, cap.c_str());
-    y += lineH(r, kFontSmall) + 6;
-    const int foot = lineH(r, kFontSmall) + 6;
+    y += graphH + 4;
+    y += drawHourTableHeader(r, x, y, w);
+    const int foot = kChipH + 6;  // подвал: кнопка «Обновить», время обновления, соседняя страница
     const int rowH = std::clamp((f.bottom - foot - y) / 8, 28, 40);
     drawHourTable(r, x, y, w, rowH, hs, n, fc.utcOffsetSec, c);
     return;
@@ -463,12 +492,11 @@ void drawWeatherToday(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T
     drawNoForecast(r, rx, y, rw, c, T);
     return;
   }
-  const Fit cap(r, kFontSmall, fc.provider == weather_core::Provider::MetNo ? T.capMm : T.cap, leftW);
-  r.drawText(kFontSmall, lx, ly, cap.c_str(), true);
   const int graphH = 118;
   drawHourGraph(r, rx, y, rw, graphH, hs, n, fc.utcOffsetSec);
-  const int ty = y + graphH + 4;
-  const int foot = lineH(r, kFontSmall) + 6;
+  int ty = y + graphH + 4;
+  ty += drawHourTableHeader(r, rx, ty, rw);
+  const int foot = lineH(r, kFontSmall) + 6;  // справа внизу — только переход на «7 дней»; кнопка «Обновить» — слева
   const int rowH = std::clamp((f.bottom - foot - ty) / 8, 22, 30);
   drawHourTable(r, rx, ty, rw, rowH, hs, n, fc.utcOffsetSec, c);
 }
@@ -496,7 +524,8 @@ void drawWeatherWeek(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T,
   // Шапка колонок значками: t↓ (минимум дня), t↑ (максимум), капля (осадки), в ландшафте ещё ветер. Полоса между t↓ и t↑ —
   // шкала недели; чем правее конец чёрной части, тем теплее день, поэтому отдельной подписи ей не нужно.
   const int hdrH = glyphSize(r, kFontSmall) + 6;
-  const int foot = lhS + 6;
+  const int foot = kChipH + 6;  // подвал с кнопкой «Обновить»
+  (void)lhS;
   const int rowH = std::clamp((f.bottom - foot - (y + hdrH)) / fc.nDays, f.land ? 34 : 44, 82);
   const int col1 = f.land ? 150 : 110, col4 = f.land ? 190 : 96, colW = f.land ? 100 : 0;
   {
@@ -598,18 +627,26 @@ void drawWeather(GfxRenderer& r, const Frame& f, const State& s, const Ctx& c, H
   int y = drawHeader(r, f, T, title, Right::Dots, s.page, hit, Act::OpenPlace, !c.place.autoLocation);
   if (s.page == 0) drawWeatherToday(r, f, c, T, v, y); else drawWeatherWeek(r, f, c, T, v, y);
 
-  // Подвал: обновлено + подсказка соседней страницы.
+  // Подвал: кнопка «Обновить», время обновления и источник, подсказка соседней страницы. В ландшафте на странице «сегодня»
+  // кнопка и время — под левой колонкой (справа до низа идёт таблица), иначе — во всю ширину.
   char upd[96];
   fmtUpdatedLine(upd, sizeof(upd), c, v, c.lang);
   const int pad = calendar_config::kSidePad;
+  const int lhS = lineH(r, kFontSmall);
   const char* hint = s.page == 0 ? T.sevenDays : T.hourly;
   char hintFull[40];
   std::snprintf(hintFull, sizeof(hintFull), s.page == 0 ? "%s >" : "< %s", hint);
   const int hw = textW(r, kFontSmall, hintFull);
-  const Fit u(r, kFontSmall, upd, f.w - 2 * pad - hw - 12);
-  const int fy = f.bottom - lineH(r, kFontSmall) - 2;
-  r.drawText(kFontSmall, f.x + pad, fy, u.c_str(), true);
-  r.drawText(kFontSmall, f.x + f.w - pad - hw, fy, hintFull, true, kBold);
+  const bool splitLand = f.land && s.page == 0;
+  const int areaW = splitLand ? 330 * f.w / 800 : f.w - 2 * pad - hw - 8;
+  const int fy = f.bottom - kChipH - 2;
+  const int bx = f.x + pad;
+  const int bw = chip(r, bx, fy, kChipH, c.wxRefreshing ? T.refreshing : T.refresh, c.wxRefreshing);
+  hit.add(bx - 4, fy - 3, bw + 8, kChipH + 6, Act::Refresh);
+  const Fit u(r, kFontSmall, upd, areaW - bw - 8);
+  r.drawText(kFontSmall, bx + bw + 8, fy + (kChipH - lhS) / 2, u.c_str(), true);
+  const int hy = splitLand ? f.bottom - lhS - 2 : fy + (kChipH - lhS) / 2;
+  r.drawText(kFontSmall, f.x + f.w - pad - hw, hy, hintFull, true, kBold);
 }
 
 // ---- «День» -----------------------------------------------------------------------------------------------------
@@ -752,17 +789,52 @@ int drawMoonCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T
 
 int drawWeatherCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T, const State& s, HitMap& hit) {
   const WxView v = wxView(c);
-  char cap[80];
-  std::snprintf(cap, sizeof(cap), "%s  \xC2\xB7  %s", T.weather, c.wx.place.city[0] ? c.wx.place.city : "");
+  const int32_t target = calendar_core::daysFromCivil(s.dayY, s.dayM, s.dayD);
+  const int32_t today = calendar_core::daysFromCivil(c.t.year, c.t.month, c.t.day);
+  const bool past = target < today;
+  const weather_core::HistDay* h = past ? c.hist.find(packDate(s.dayY, s.dayM, s.dayD), c.wx.place.lat, c.wx.place.lon) : nullptr;
+  // Прошедший день — в заголовке карточки источник: «Архив Open-Meteo» или «Сохранённый прогноз» (записан устройством).
+  const char* head = !h ? T.weather : h->src == weather_core::HistSource::Archive ? T.histArchive : T.histRecorded;
+  char cap[96];
+  std::snprintf(cap, sizeof(cap), "%s  \xC2\xB7  %s", head, c.wx.place.city[0] ? c.wx.place.city : "");
   Card k = beginCard(r, x, y, w, cap);
   const auto& fc = c.wx.fc;
-  const int32_t target = calendar_core::daysFromCivil(s.dayY, s.dayM, s.dayD);
   int idx = -1;
   if (v.fcOk) {
     for (int i = 0; i < fc.nDays; ++i) {
       const Ymd dt = fromEpoch(fc.d[i].ts, fc.utcOffsetSec);
       if (calendar_core::daysFromCivil(dt.y, dt.m, dt.d) == target) idx = i;
     }
+  }
+  if (past) {  // прошедший день — история: архив Open-Meteo или сохранённый устройством прогноз
+    if (!h) {
+      const char* msg = c.histState == HistState::Waiting  ? T.histLoading
+                        : c.histState == HistState::Failed ? T.histFailed
+                                                           : T.histNone;
+      const Fit t(r, kFontSmall, msg, w - 16);
+      drawCentered(r, kFontSmall, x, w, k.cy + 4, t.c_str());
+      k.cy += lineH(r, kFontSmall) + 10;
+      return endCard(r, k);
+    }
+    const auto& WL = weather_core::labels(c.lang);
+    const int iconS = 46;
+    drawWeatherIcon(r, h->code >= 0 ? weather_core::iconFor(h->code, true) : Icon::Unknown, x + 12, k.cy + 2, iconS);
+    const int tx = x + 12 + iconS + 12, tw = w - (tx - x) - 10;
+    const char* desc = h->code >= 0 ? weather_core::description(c.lang, h->code) : WL.noData;
+    const Fit dn(r, kFontText, desc, tw, kBold);
+    r.drawText(kFontText, tx, k.cy + 2, dn.c_str(), true, kBold);
+    char a[16], b[16], mm[16], pr[24];
+    fmtDeg(a, sizeof(a), h->tMin);
+    fmtDeg(b, sizeof(b), h->tMax);
+    fmtMm(mm, sizeof(mm), h->mm, c.lang);
+    std::snprintf(pr, sizeof(pr), "%s %s", mm, WL.mmUnit);
+    RichItems ri;  // та же строка, что и у прогноза дня: t↓ t↑ осадки
+    ri.add(Glyph::TempMin, "%s", a);
+    ri.add(Glyph::TempMax, "%s", b);
+    ri.add(Glyph::Drop, "%s", pr);
+    drawRichRows(r, kFontSmall, tx, tw, k.cy + 2 + lineH(r, kFontText), ri, kRegular, false);
+    k.cy += std::max(iconS + 8, lineH(r, kFontText) + glyphSize(r, kFontSmall) + 8);
+    return endCard(r, k);
   }
   if (idx < 0) {
     const Fit t(r, kFontSmall, T.fcOnly, w - 16);
@@ -789,9 +861,9 @@ int drawWeatherCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt
   ri.add(Glyph::Drop, "%s", pr);
   drawRichRows(r, kFontSmall, tx, tw, k.cy + 2 + lineH(r, kFontText), ri, kRegular, false);
   k.cy += std::max(iconS + 8, lineH(r, kFontText) + glyphSize(r, kFontSmall) + 8);
-  const int h = endCard(r, k);
-  hit.add(x, y, w, h - 8, Act::OpenWeek);
-  return h;
+  const int ch = endCard(r, k);
+  hit.add(x, y, w, ch - 8, Act::OpenWeek);
+  return ch;
 }
 
 // Фиксированные «слоты» заголовка дня — чтобы ничего не «прыгало» при смене даты: день недели, дата, «через N дн.»
@@ -1026,6 +1098,9 @@ void drawPlace(GfxRenderer& r, const Frame& f, const Ctx& c, HitMap& hit) {
     k.cy += 4;
     const int w = chip(r, lx + 12, k.cy, kChipH, T.findCity, false);
     hit.add(lx + 8, k.cy - 3, w + 8, kChipH + 6, Act::SearchCity);
+    const int cx = lx + 12 + w + 12;
+    const int w2 = chip(r, cx, k.cy, kChipH, T.coordsBtn, false);
+    hit.add(cx - 4, k.cy - 3, w2 + 8, kChipH + 6, Act::AddCoords);
     k.cy += kChipH + 2;
     ly += endCard(r, k);
   }
@@ -1072,6 +1147,45 @@ void drawPlace(GfxRenderer& r, const Frame& f, const Ctx& c, HitMap& hit) {
     }
   }
 
+  // Поиска нет — сохранённые места: тап — выбрать, «x» справа — убрать.
+  if (pv.search == SearchState::Idle) {
+    if (pv.note && pv.note[0]) {
+      const Fit t(r, kFontSmall, pv.note, rw, kBold);
+      r.drawText(kFontSmall, rx, ry, t.c_str(), true, kBold);
+      ry += lhS + 6;
+    }
+    if (pv.nSaved > 0 && ry + lhS + 6 < logY - 8) {
+      r.drawText(kFontSmall, rx, ry, T.savedTitle, true, kBold);
+      ry += lhS + 6;
+      const int rowH = lhS + 18, delW = rowH + 6;
+      for (int i = 0; i < pv.nSaved && ry + rowH <= logY - 8; ++i) {
+        const weather_core::Place& p = pv.saved[i];
+        const bool current = !pv.autoLocation && pv.manual &&
+                             weather_core::samePlace(p.lat, p.lon, pv.manual->lat, pv.manual->lon);
+        const int pw = rw - delW - 6;  // зона выбора; справа, через зазор, — кнопка удаления
+        r.drawRoundedRect(rx, ry, pw, rowH, current ? 3 : 2, 10, true);
+        const int ty = ry + (rowH - lhS) / 2;
+        int nx = rx + 12;
+        if (current) {
+          drawGlyph(r, Glyph::Pin, nx, ty, lhS);
+          nx += lhS + 4;
+        }
+        const Fit name(r, kFontSmall, p.city[0] ? p.city : "?", pw / 2, kBold);
+        r.drawText(kFontSmall, nx, ty, name.c_str(), true, kBold);
+        nx += textW(r, kFontSmall, name.c_str(), kBold) + 10;
+        char co[40];
+        std::snprintf(co, sizeof(co), "%.2f, %.2f", p.lat, p.lon);
+        if (textW(r, kFontSmall, co) <= rx + pw - 12 - nx) r.drawText(kFontSmall, nx, ty, co, true);
+        hit.add(rx, ry, pw, rowH, Act::PickSaved, i);
+        const int dx = rx + rw - delW;
+        r.drawRoundedRect(dx, ry, delW, rowH, 2, 10, true);
+        drawCentered(r, kFontSmall, dx, delW, ty, "x", true, kBold);
+        hit.add(dx, ry, delW, rowH, Act::DeleteSaved, i);
+        ry += rowH + 6;
+      }
+    }
+  }
+
   // Журнал на SD — внизу, всегда на одном месте.
   char hint[64];
   std::snprintf(hint, sizeof(hint), T.logHint, pv.logDir);
@@ -1083,6 +1197,8 @@ void drawPlace(GfxRenderer& r, const Frame& f, const Ctx& c, HitMap& hit) {
 }
 
 }  // namespace
+
+const char* notCoordsFmt(Lang lang) { return txt(lang).notCoords; }
 
 void draw(GfxRenderer& r, const Rect& vp, const State& s, const Ctx& c, HitMap& hit) {
   const Frame f = makeFrame(vp);

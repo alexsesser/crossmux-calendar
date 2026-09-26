@@ -321,6 +321,62 @@ int main(int argc, char** argv) {
     CHECK(parseCache(junk, std::strlen(junk), rd) && rd.route == Route::OpenMeteoHttps);
     CHECK(std::string(providerName(Provider::MetNo)) == "MET Norway" && std::string(providerName(Provider::OpenMeteo)) == "Open-Meteo.com");
   }
+  // --- Сохранённые места: новое — первым, повтор (≈ 5 км) заменяет, лишнее выпадает; круг через файл настроек ---
+  {
+    Settings st;
+    auto mk = [](const char* n, double la, double lo) { Place p; copyUtf8(p.city, sizeof(p.city), n); p.lat = la; p.lon = lo; return p; };
+    addSaved(st, mk("A", 10, 10));
+    addSaved(st, mk("B", 20, 20));
+    addSaved(st, mk("A2", 10.01, 10.01));  // то же место — новое название, наверх
+    CHECK(st.nSaved == 2 && std::string(st.saved[0].city) == "A2" && std::string(st.saved[1].city) == "B");
+    for (int i = 0; i < 10; ++i) addSaved(st, mk("X", 30 + i, 30));
+    CHECK(st.nSaved == kMaxSavedPlaces && st.saved[0].lat == 39);
+    removeSaved(st, 0);
+    CHECK(st.nSaved == kMaxSavedPlaces - 1 && st.saved[0].lat == 38);
+    removeSaved(st, 99);
+    CHECK(st.nSaved == kMaxSavedPlaces - 1);
+    addSaved(st, mk("Дача", 56.1, 38.2));
+    const std::string js = serializeSettings(st);
+    Settings back;
+    CHECK(parseSettings(js.data(), js.size(), back));
+    CHECK(back.nSaved == st.nSaved && std::string(back.saved[0].city) == "Дача" && std::fabs(back.saved[0].lat - 56.1) < 1e-4);
+    const char* old = R"({"v":1,"auto":true})";  // старый файл без списка
+    Settings o;
+    CHECK(parseSettings(old, std::strlen(old), o) && o.nSaved == 0);
+  }
+  // --- История: архив Open-Meteo (настоящий ответ) и своя запись ---
+  {
+    const std::string j = slurp((dir + "/archive_moscow.json").c_str());
+    HistDay d[7];
+    const int n = parseArchive(j.data(), j.size(), 55.75, 37.62, 777, d, 7);
+    CHECK(n == 7);
+    CHECK(d[0].date == 20260919 && d[6].date == 20260925 && d[3].src == HistSource::Archive && d[0].savedAt == 777);
+    CHECK(std::fabs(d[3].mm - 23.6f) < 1e-3 && d[3].code == 63 && d[3].tMin <= d[3].tMax && !std::isnan(d[3].wind));
+    CHECK(parseArchive(j.data(), j.size(), 55.75, 37.62, 777, d, 3) == 3);
+    for (const char* bad : {"", "x", "{}", R"({"error":true,"reason":"x"})"}) CHECK(parseArchive(bad, std::strlen(bad), 1, 2, 3, d, 7) == -1);
+    const char* nulls = R"({"daily":{"time":["2026-09-26"],"temperature_2m_max":[null],"temperature_2m_min":[null]}})";
+    CHECK(parseArchive(nulls, std::strlen(nulls), 1, 2, 3, d, 7) == 0);  // архив до этого дня ещё не дошёл
+
+    HistStore hs;
+    HistDay rec;
+    rec.date = 20260920; rec.lat = 55.75f; rec.lon = 37.62f; rec.tMax = 1; rec.src = HistSource::Recorded; rec.savedAt = 1;
+    hs.put(rec);
+    CHECK(hs.find(20260920, 55.75, 37.62) && hs.find(20260920, 55.75, 37.62)->src == HistSource::Recorded);
+    CHECK(!hs.find(20260920, 59.9, 30.3) && !hs.find(20260921, 55.75, 37.62));  // другое место, другой день
+    HistDay arc = rec; arc.src = HistSource::Archive; arc.tMax = 2; arc.savedAt = 2;
+    hs.put(arc);
+    CHECK(hs.n == 1 && hs.find(20260920, 55.75, 37.62)->src == HistSource::Archive);
+    hs.put(rec);  // запись устройства архив не заменяет
+    CHECK(hs.find(20260920, 55.75, 37.62)->tMax == 2);
+    for (int i = 0; i < kHistMax + 5; ++i) { HistDay x = rec; x.date = 20250101 + i; x.savedAt = 100 + i; hs.put(x); }
+    CHECK(hs.n == kHistMax && !hs.find(20260920, 55.75, 37.62));  // самое давнее вытеснено
+    const std::string sj = serializeHistory(hs);
+    HistStore back;
+    CHECK(parseHistory(sj.data(), sj.size(), back) && back.n == hs.n && back.d[0].date == hs.d[0].date);
+    char u[400];
+    CHECK(buildArchiveUrl(55.7558, 37.6173, 20260919, 20260925, u, sizeof(u)) > 0 &&
+          std::string(u).find("https://archive-api.open-meteo.com/v1/archive?latitude=55.76&longitude=37.62&start_date=2026-09-19&end_date=2026-09-25") == 0);
+  }
   std::printf("weather: ошибок %d\n", fails);
   return fails;
 }

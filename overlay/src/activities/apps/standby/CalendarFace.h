@@ -58,7 +58,9 @@ class CalendarFace final : public StandbyFace {
   void shiftYear(int delta);
   void shiftHalf(int delta);
   void showMonth(int year, unsigned month);
-  void openCitySearch();  // клавиатура «найти город» поверх стендбая (экран «Место»)
+  // Клавиатура поверх стендбая (экран «Место»): 0 — найти город, 1 — координаты, 2 — подпись к координатам.
+  void openKeyboard(int mode);
+  void openCitySearch() { openKeyboard(0); }
   void requestCleanup(const char* why);  // следующий кадр — с полной очисткой экрана (см. render())
   cal_detail::PlaceView placeView() const;
   cal_detail::Ctx makeCtx(const cal_draw::Today& t, calendar_core::Lang lang, const cal_detail::PlaceView& pv) const;
@@ -73,6 +75,9 @@ class CalendarFace final : public StandbyFace {
   const char* cleanupWhy_ = nullptr;
   uint32_t lastBeatMs_ = 0;       // последняя строка «состояние» в журнале
   bool keyboardOpen_ = false;     // открыта клавиатура «найти город» (грань ждёт ответ в tick())
+  char placeNote_[96] = "";       // сообщение на экране «Место» («не координаты: …»)
+  double pendingLat_ = 0, pendingLon_ = 0;  // введённые координаты — ждут подписи
+  cal_detail::Screen placeFrom_ = cal_detail::Screen::Weather;  // откуда открыли «Место» — туда и «Назад»
   MappedInputManager* input_ = nullptr;  // из handleInput(): нужен клавиатуре
 
 

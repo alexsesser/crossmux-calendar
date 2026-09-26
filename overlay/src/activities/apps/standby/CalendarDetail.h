@@ -26,13 +26,17 @@ enum class Act : uint8_t {
   Next,         // › следующий (день)
   OpenWeek,     // карточка погоды дня → «Погода», 7 дней
   OpenMonth,    // «Год» → главный на этом месяце; arg = год*100 + месяц
-  OpenPlace,    // «Погода»: тап по названию города → «Место»
+  OpenPlace,    // тап по названию города (главный, «Погода») → «Место»
   SetAuto,      // «Место»: определять по IP
   SetManual,    // «Место»: вручную
   SearchCity,   // «Место»: найти город по названию (клавиатура)
   PinIp,        // «Место»: город по IP → ручное место
   PickHit,      // «Место»: выбрать найденный город; arg = номер
   ToggleLog,    // «Место»: журнал на SD вкл/выкл
+  AddCoords,    // «Место»: ввести координаты и подпись (клавиатура)
+  PickSaved,    // «Место»: выбрать сохранённое место; arg = номер
+  DeleteSaved,  // «Место»: убрать сохранённое место; arg = номер
+  Refresh,      // «Погода»: обновить сейчас
 };
 
 struct Hit {
@@ -93,7 +97,13 @@ struct PlaceView {
   const weather_core::GeoHit* hits = nullptr;
   bool sdLog = false;
   const char* logDir = "";
+  const weather_core::Place* saved = nullptr;  // сохранённые места
+  int nSaved = 0;
+  const char* note = "";                       // сообщение под карточками (например, «не координаты»)
 };
+
+// Архив погоды для дня на экране «День»: 0 — нет запроса, 1 — загружается, 2 — не удалось.
+enum class HistState : uint8_t { None, Waiting, Failed };
 
 // Всё, что нужно для рисования, кроме самого состояния экрана.
 struct Ctx {
@@ -102,10 +112,16 @@ struct Ctx {
   const weather_core::Cache& wx;
   const holiday_core::Store& hol;
   const PlaceView& place;
+  const weather_core::HistStore& hist;
+  HistState histState;  // для дня, открытого на экране «День»
+  bool wxRefreshing;     // погода сейчас загружается (кнопка «Обновить» — «Обновляю...»)
 };
 
 // Рисует вложенный экран s.screen (Weather / Day / Year / Place) и заполняет карту тап-зон.
 void draw(GfxRenderer& r, const Rect& vp, const State& s, const Ctx& c, HitMap& hit);
+
+// Формат сообщения «не координаты: «%s»» на языке интерфейса (для экрана «Место»).
+const char* notCoordsFmt(calendar_core::Lang lang);
 
 // Подпись дня недели/даты «Пн 21» и т.п. вынесены в реализацию. Классификация дня с учётом выключателя праздников:
 holiday_core::DayInfo dayInfo(const Ctx& c, int y, unsigned m, unsigned d);

@@ -821,6 +821,27 @@ bool parseCache(const char* json, size_t len, Cache& out) {
 
 // ---- Настройки -----------------------------------------------------------------
 
+void addSaved(Settings& s, const Place& p) {
+  Place keep[kMaxSavedPlaces];
+  int n = 0;
+  keep[n] = p;
+  keep[n].fromIp = false;
+  keep[n].ipEpoch = 0;
+  keep[n].ssid[0] = '\0';
+  ++n;
+  for (int i = 0; i < s.nSaved && n < kMaxSavedPlaces; ++i) {
+    if (!samePlace(s.saved[i].lat, s.saved[i].lon, p.lat, p.lon)) keep[n++] = s.saved[i];
+  }
+  for (int i = 0; i < n; ++i) s.saved[i] = keep[i];
+  s.nSaved = n;
+}
+
+void removeSaved(Settings& s, int i) {
+  if (i < 0 || i >= s.nSaved) return;
+  for (int k = i; k + 1 < s.nSaved; ++k) s.saved[k] = s.saved[k + 1];
+  --s.nSaved;
+}
+
 std::string serializeSettings(const Settings& s) {
   JsonDocument doc;
   doc["v"] = 1;
@@ -830,6 +851,15 @@ std::string serializeSettings(const Settings& s) {
   m["city"] = s.manual.city;
   m["lat"] = s.manual.lat;
   m["lon"] = s.manual.lon;
+  if (s.nSaved > 0) {
+    JsonArray a = doc["saved"].to<JsonArray>();
+    for (int i = 0; i < s.nSaved; ++i) {
+      JsonObject o = a.add<JsonObject>();
+      o["city"] = s.saved[i].city;
+      o["lat"] = s.saved[i].lat;
+      o["lon"] = s.saved[i].lon;
+    }
+  }
   std::string out;
   serializeJson(doc, out);
   return out;
@@ -850,8 +880,140 @@ bool parseSettings(const char* json, size_t len, Settings& out) {
     copyUtf8(s.manual.city, sizeof(s.manual.city), m["city"] | "");
   }
   s.manual.fromIp = false;
+  for (JsonVariantConst o : doc["saved"].as<JsonArrayConst>()) {
+    if (s.nSaved >= kMaxSavedPlaces) break;
+    if (!o["lat"].is<double>() || !o["lon"].is<double>()) continue;
+    const double la = o["lat"].as<double>(), lo = o["lon"].as<double>();
+    if (!validCoord(la, lo)) continue;
+    Place& p = s.saved[s.nSaved++];
+    p.lat = la;
+    p.lon = lo;
+    copyUtf8(p.city, sizeof(p.city), o["city"] | "");
+  }
   out = s;
   return true;
+}
+
+// ---- История -------------------------------------------------------------------
+
+const HistDay* HistStore::find(int32_t date, double lat, double lon) const {
+  const HistDay* best = nullptr;
+  for (int i = 0; i < n; ++i) {
+    const HistDay& h = d[i];
+    if (h.date != date || !samePlace(h.lat, h.lon, lat, lon)) continue;
+    if (!best || (h.src == HistSource::Archive && best->src != HistSource::Archive)) best = &h;
+  }
+  return best;
+}
+
+void HistStore::put(const HistDay& h) {
+  int slot = -1;
+  for (int i = 0; i < n; ++i) {
+    if (d[i].date == h.date && samePlace(d[i].lat, d[i].lon, h.lat, h.lon)) {
+      if (d[i].src == HistSource::Archive && h.src == HistSource::Recorded) return;  // архив точнее
+      slot = i;
+      break;
+    }
+  }
+  if (slot < 0 && n < kHistMax) slot = n++;
+  if (slot < 0) {  // полон — вытесняем самое давно записанное
+    slot = 0;
+    for (int i = 1; i < n; ++i) {
+      if (d[i].savedAt < d[slot].savedAt) slot = i;
+    }
+  }
+  d[slot] = h;
+}
+
+std::string serializeHistory(const HistStore& hs) {
+  JsonDocument doc;
+  doc["v"] = 1;
+  JsonArray a = doc["d"].to<JsonArray>();
+  for (int i = 0; i < hs.n; ++i) {
+    const HistDay& h = hs.d[i];
+    JsonObject o = a.add<JsonObject>();
+    o["dt"] = h.date;
+    o["la"] = h.lat;
+    o["lo"] = h.lon;
+    auto put = [&o](const char* k, float v) {
+      if (!std::isnan(v)) o[k] = v;
+    };
+    put("mx", h.tMax);
+    put("mn", h.tMin);
+    put("mm", h.mm);
+    put("w", h.wind);
+    if (h.code >= 0) o["c"] = h.code;
+    o["s"] = static_cast<int>(h.src);
+    o["at"] = h.savedAt;
+  }
+  std::string out;
+  serializeJson(doc, out);
+  return out;
+}
+
+bool parseHistory(const char* json, size_t len, HistStore& out) {
+  JsonDocument doc;
+  if (deserializeJson(doc, json, len) || !doc.is<JsonObject>()) return false;
+  HistStore hs;
+  for (JsonVariantConst o : doc["d"].as<JsonArrayConst>()) {
+    if (hs.n >= kHistMax) break;
+    HistDay h;
+    h.date = o["dt"] | 0;
+    const int src = o["s"] | 0;
+    if (h.date <= 0 || src < 1 || src > 2) continue;
+    h.lat = numberOrNan(o["la"]);
+    h.lon = numberOrNan(o["lo"]);
+    h.tMax = numberOrNan(o["mx"]);
+    h.tMin = numberOrNan(o["mn"]);
+    h.mm = numberOrNan(o["mm"]);
+    h.wind = numberOrNan(o["w"]);
+    h.code = o["c"].is<int>() ? static_cast<int16_t>(o["c"].as<int>()) : -1;
+    h.src = static_cast<HistSource>(src);
+    h.savedAt = o["at"] | 0u;
+    hs.d[hs.n++] = h;
+  }
+  out = hs;
+  return true;
+}
+
+int buildArchiveUrl(double lat, double lon, int32_t from, int32_t to, char* buf, size_t size, bool https) {
+  return std::snprintf(buf, size,
+                       "%s://archive-api.open-meteo.com/v1/archive?latitude=%.2f&longitude=%.2f"
+                       "&start_date=%04d-%02d-%02d&end_date=%04d-%02d-%02d"
+                       "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,wind_speed_10m_max"
+                       "&timezone=auto&wind_speed_unit=ms",
+                       https ? "https" : "http", lat, lon, static_cast<int>(from / 10000), static_cast<int>(from / 100 % 100),
+                       static_cast<int>(from % 100), static_cast<int>(to / 10000), static_cast<int>(to / 100 % 100),
+                       static_cast<int>(to % 100));
+}
+
+int parseArchive(const char* json, size_t len, double lat, double lon, uint32_t nowEpoch, HistDay* out, int maxOut) {
+  JsonDocument doc;
+  if (deserializeJson(doc, json, len) || !doc.is<JsonObject>()) return -1;
+  JsonVariantConst day = doc["daily"];
+  JsonArrayConst time = day["time"].as<JsonArrayConst>();
+  if (time.isNull()) return -1;
+  int n = 0;
+  for (size_t i = 0; i < time.size() && n < maxOut; ++i) {
+    // Даты — строками «ГГГГ-ММ-ДД» (без timeformat=unixtime: так дата уже местная для места).
+    int y = 0;
+    unsigned m = 0, dd = 0;
+    if (std::sscanf(time[i] | "", "%d-%u-%u", &y, &m, &dd) != 3) continue;
+    HistDay h;
+    h.date = y * 10000 + static_cast<int32_t>(m) * 100 + static_cast<int32_t>(dd);
+    h.lat = static_cast<float>(lat);
+    h.lon = static_cast<float>(lon);
+    h.tMax = numberOrNan(day["temperature_2m_max"][i]);
+    h.tMin = numberOrNan(day["temperature_2m_min"][i]);
+    if (std::isnan(h.tMax) && std::isnan(h.tMin)) continue;  // архив ещё не дошёл до этого дня
+    h.mm = numberOrNan(day["precipitation_sum"][i]);
+    h.wind = numberOrNan(day["wind_speed_10m_max"][i]);
+    h.code = day["weather_code"][i].is<int>() ? static_cast<int16_t>(day["weather_code"][i].as<int>()) : -1;
+    h.src = HistSource::Archive;
+    h.savedAt = nowEpoch;
+    out[n++] = h;
+  }
+  return n;
 }
 
 }  // namespace weather_core

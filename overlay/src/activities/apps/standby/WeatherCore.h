@@ -157,11 +157,18 @@ bool parseCache(const char* json, size_t len, Cache& out);  // при false out 
 
 // ---- Настройки, которые меняются на устройстве (экран «Место») ----------------------------------------------------
 // Лежат на SD отдельно от кэша (удалить кэш — настройки останутся). Начальные значения — из CalendarConfig.h.
+constexpr int kMaxSavedPlaces = 5;  // столько строк помещается на экране «Место»
 struct Settings {
   bool autoLocation = calendar_config::kLocationAutoByDefault;  // true — место по IP, false — вручную
   Place manual;                                               // место «вручную»; по умолчанию — kDefaultCity
   bool sdLog = calendar_config::kSdLogByDefault;              // подробный журнал на SD-карту
+  // Сохранённые места (последнее выбранное — первым): выбирать ручное место одним тапом на экране «Место».
+  Place saved[kMaxSavedPlaces];
+  int nSaved = 0;
 };
+// Место — в начало списка сохранённых (то же место, ≈ 5 км, заменяется: новое название); лишнее в конце выпадает.
+void addSaved(Settings& s, const Place& p);
+void removeSaved(Settings& s, int i);
 std::string serializeSettings(const Settings& s);
 bool parseSettings(const char* json, size_t len, Settings& out);  // при false out не меняется
 
@@ -181,6 +188,34 @@ int buildNominatimUrl(const char* query, calendar_core::Lang lang, char* buf, si
 int parseNominatim(const char* json, size_t len, GeoHit* out, int maxOut);
 // Координаты текстом: «55.75, 37.62», «55,75 37,62», «55.75;37.62». false — это не координаты (или вне диапазона).
 bool parseCoords(const char* text, double& lat, double& lon);
+
+// ---- История погоды: прошедшие дни на экране «День» ----------------------------------------------------------------
+// Источники: архив Open-Meteo (archive-api.open-meteo.com, данные до вчерашнего дня) и собственная запись устройства —
+// последний полученный прогноз на каждый день (виден, даже если архив из вашей сети недоступен).
+enum class HistSource : uint8_t { None = 0, Archive = 1, Recorded = 2 };
+struct HistDay {
+  int32_t date = 0;  // calendar_core: packDate-подобно, год*10000 + месяц*100 + день (местная дата места)
+  float lat = NAN, lon = NAN;  // для какого места
+  float tMax = NAN, tMin = NAN, mm = NAN, wind = NAN;
+  int16_t code = -1;
+  HistSource src = HistSource::None;
+  uint32_t savedAt = 0;  // когда записано (вытесняется самое давнее)
+};
+constexpr int kHistMax = 48;
+struct HistStore {
+  HistDay d[kHistMax];
+  int n = 0;
+  // Запись для даты и места (≈ 5 км); при наличии обеих — архивная. nullptr — нет.
+  const HistDay* find(int32_t date, double lat, double lon) const;
+  // Добавить или заменить (архив не заменяется записью устройства).
+  void put(const HistDay& h);
+};
+std::string serializeHistory(const HistStore& h);
+bool parseHistory(const char* json, size_t len, HistStore& out);  // при false out не меняется
+// Архив Open-Meteo за даты [from, to] (год*10000+месяц*100+день), дни по часовому поясу места.
+int buildArchiveUrl(double lat, double lon, int32_t from, int32_t to, char* buf, size_t size, bool https = true);
+// Ответ архива → дни (src = Archive). Число дней или -1. Дни без температуры пропускаются.
+int parseArchive(const char* json, size_t len, double lat, double lon, uint32_t nowEpoch, HistDay* out, int maxOut);
 
 // copyUtf8 (объявлена выше): обрезка UTF-8 до dstSize-1 байт по границе символа + завершающий ноль.
 

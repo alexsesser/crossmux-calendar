@@ -71,6 +71,7 @@ const char* screenName(cal_detail::Screen s) {
 struct CityMailbox {
   bool ready = false;
   bool cancelled = false;
+  int mode = 0;  // см. CalendarFace::openKeyboard
   std::string text;
 };
 CityMailbox g_cityBox;
@@ -173,6 +174,7 @@ int drawWeatherBlock(GfxRenderer& r, int x, int y, int w, const weather_core::Ca
   const int pad = compact ? kCompactPad : kSidePad;
   const int left = x + pad;
   const int inner = w - 2 * pad;
+  int cityZoneW = 0, cityZoneH = 0;
 
   // Данные старше суток-полусуток не выдаём за текущие; «устарело» — после kStaleSec.
   const uint32_t age = (t.epoch >= c.weather.fetchedEpoch) ? t.epoch - c.weather.fetchedEpoch : 0;
@@ -189,7 +191,6 @@ int drawWeatherBlock(GfxRenderer& r, int x, int y, int w, const weather_core::Ca
   {
     char upd[40];
     fmtUpdated(upd, sizeof(upd), c.weather, t, lang, expired, stale);
-    if (compact && !stale && !expired) upd[0] = '\0';  // в узкой колонке места нет: свежесть видно и так
     const int updW = upd[0] ? textW(r, kFontSmall, upd) : 0;
     const char* cityRaw = c.place.city[0] ? c.place.city : WL.unknownPlace;
     // Место задано вручную (экран «Место») — метка перед названием.
@@ -199,6 +200,9 @@ int drawWeatherBlock(GfxRenderer& r, int x, int y, int w, const weather_core::Ca
     r.drawText(kFontSmall, left + pinW, y, city.c_str(), true, kBold);
     if (upd[0]) r.drawText(kFontSmall, left + inner - updW, y, upd, true);
     y += r.getLineHeight(kFontSmall) + 4;
+    // Тап по названию города → экран «Место» (добавляется в конце: зона поверх зоны всего блока).
+    cityZoneW = std::max(pinW + textW(r, kFontSmall, city.c_str(), kBold) + 24, 120);
+    cityZoneH = y - y0 + 8;
   }
 
   // Строка 2: иконка, температура, описание.
@@ -312,6 +316,7 @@ int drawWeatherBlock(GfxRenderer& r, int x, int y, int w, const weather_core::Ca
     y += 2;
   }
   hit.add(left, y0, inner, y - y0, cal_detail::Act::OpenWeather);  // тап по блоку погоды → экран «Погода»
+  hit.add(left, y0, std::min(cityZoneW, inner), cityZoneH, cal_detail::Act::OpenPlace);
   return y - y0;
 }
 
@@ -491,21 +496,23 @@ void CalendarFace::closeDetail() {
 
 void CalendarFace::requestCleanup(const char* why) { cleanupWhy_ = why; }
 
-void CalendarFace::openCitySearch() {
+void CalendarFace::openKeyboard(int mode) {
   if (!renderer_ || !input_) return;
   // Заголовок клавиатуры рисуется шрифтом без кириллицы (CONCEPT §4.6) — латиницей.
-  auto kb = makeUniqueNoThrow<CityEntryActivity>(*renderer_, *input_, currentLang() == Lang::De ? "Ort" : "City",
-                                                 std::string(), 40, InputType::Text);
+  const bool de = currentLang() == Lang::De;
+  const char* title = mode == 1 ? "Lat, Lon (55.75, 37.62)" : mode == 2 ? "Name" : (de ? "Ort" : "City");
+  auto kb = makeUniqueNoThrow<CityEntryActivity>(*renderer_, *input_, title, std::string(), 40, InputType::Text);
   if (!kb) {
     LOG_ERR("STANDBY", "OOM: city keyboard");
     cal_log::line("UI", "нет памяти под клавиатуру");
     return;
   }
   g_cityBox = CityMailbox{};
+  g_cityBox.mode = mode;
   keyboardOpen_ = true;
   renderer_->requestNextRefresh(HalDisplay::FULL_REFRESH);  // клавиатура поверх календаря — с полной очисткой
   requestCleanup("возврат с клавиатуры");                   // и обратно — тоже
-  cal_log::line("UI", "клавиатура: поиск города");
+  cal_log::line("UI", "клавиатура: %s", mode == 1 ? "координаты" : mode == 2 ? "подпись места" : "поиск города");
   activityManager.pushActivity(std::move(kb));
 }
 
@@ -570,7 +577,7 @@ void CalendarFace::applyHit(const cal_detail::Hit& h) {
       break;
     }
     case Act::Close:
-      if (st_.screen == Screen::Place) {  // «Место» открывается с «Погоды» — туда и возвращаемся
+      if (st_.screen == Screen::Place && placeFrom_ == Screen::Weather) {  // «Место» открыли с «Погоды» — туда и назад
         st_.screen = Screen::Weather;
         st_.page = 0;
       } else {
@@ -578,7 +585,24 @@ void CalendarFace::applyHit(const cal_detail::Hit& h) {
       }
       break;
     case Act::OpenPlace:
+      placeFrom_ = prevScreen;
+      placeNote_[0] = '\0';
       st_.screen = Screen::Place;
+      break;
+    case Act::AddCoords:
+      placeNote_[0] = '\0';
+      openKeyboard(1);
+      break;
+    case Act::PickSaved:
+      placeNote_[0] = '\0';
+      weather_.pickSaved(h.arg);
+      break;
+    case Act::DeleteSaved:
+      weather_.removeSaved(h.arg);
+      break;
+    case Act::Refresh:
+      weather_.requestRefresh();
+      cal_log::line("UI", "погода: обновить сейчас");
       break;
     case Act::SetAuto:
       weather_.setAutoLocation(true);
@@ -734,12 +758,28 @@ cal_detail::PlaceView CalendarFace::placeView() const {
   pv.hits = pv.nHits ? &weather_.searchHit(0) : nullptr;
   pv.sdLog = set.sdLog;
   pv.logDir = cal_log::dirPath();
+  pv.saved = set.saved;
+  pv.nSaved = set.nSaved;
+  pv.note = placeNote_;
   return pv;
 }
 
 cal_detail::Ctx CalendarFace::makeCtx(const cal_draw::Today& t, calendar_core::Lang lang,
                                       const cal_detail::PlaceView& pv) const {
-  return cal_detail::Ctx{t, lang, weather_.cache(), weather_.holidays(), pv};
+  cal_detail::HistState hs = cal_detail::HistState::None;
+  if (st_.screen == cal_detail::Screen::Day) {
+    switch (weather_.historyState(cal_detail::packDate(st_.dayY, st_.dayM, st_.dayD))) {
+      case WeatherClient::Hist::Waiting:
+        hs = cal_detail::HistState::Waiting;
+        break;
+      case WeatherClient::Hist::Failed:
+        hs = cal_detail::HistState::Failed;
+        break;
+      case WeatherClient::Hist::None:
+        break;
+    }
+  }
+  return cal_detail::Ctx{t, lang, weather_.cache(), weather_.holidays(), pv, weather_.history(), hs, weather_.refreshing()};
 }
 
 // ---- Такт ---------------------------------------------------------------------------------------------------------
@@ -752,7 +792,34 @@ StandbyFace::TickResult CalendarFace::tick() {
     g_cityBox.ready = false;
     keyboardOpen_ = false;
     lastInputMs_ = millis();  // пока была клавиатура, tick() не вызывался: не закрыть «Место» по таймауту сразу
-    if (!g_cityBox.cancelled && !g_cityBox.text.empty()) {
+    const int mode = g_cityBox.mode;
+    if (mode == 2) {  // подпись к введённым координатам; пусто или «отмена» — подписью будут сами координаты
+      RenderLock lock;
+      weather_core::Place p;
+      if (!g_cityBox.cancelled && !g_cityBox.text.empty()) {
+        weather_core::copyUtf8(p.city, sizeof(p.city), g_cityBox.text.c_str());
+      } else {
+        std::snprintf(p.city, sizeof(p.city), "%.4f, %.4f", pendingLat_, pendingLon_);
+      }
+      p.lat = pendingLat_;
+      p.lon = pendingLon_;
+      weather_.clearSearch();
+      weather_.setManualPlace(p);  // и в сохранённые
+      return TickResult::Redraw;
+    }
+    if (mode == 1 && !g_cityBox.cancelled && !g_cityBox.text.empty()) {
+      double la = 0, lo = 0;
+      if (weather_core::parseCoords(g_cityBox.text.c_str(), la, lo)) {
+        pendingLat_ = la;
+        pendingLon_ = lo;
+        openKeyboard(2);  // теперь — подпись
+      } else {
+        RenderLock lock;
+        std::snprintf(placeNote_, sizeof(placeNote_), cal_detail::notCoordsFmt(currentLang()), g_cityBox.text.c_str());
+      }
+      return TickResult::Redraw;
+    }
+    if (mode == 0 && !g_cityBox.cancelled && !g_cityBox.text.empty()) {
       RenderLock lock;  // меняем то, что читает render()
       double la = 0, lo = 0;
       if (weather_core::parseCoords(g_cityBox.text.c_str(), la, lo)) {
@@ -780,6 +847,11 @@ StandbyFace::TickResult CalendarFace::tick() {
   if (!snap_.valid) return TickResult::None;
 
   const bool detail = st_.screen != cal_detail::Screen::Main;
+  // «День» с прошедшей датой — архив погоды для неё (клиент сам решит, нужен ли запрос).
+  if (st_.screen == cal_detail::Screen::Day) {
+    weather_.wantHistory(cal_detail::packDate(st_.dayY, st_.dayM, st_.dayD),
+                         cal_detail::packDate(snap_.year, snap_.month, snap_.day));
+  }
 
   // Вложенный экран закрывается сам после kDetailAutoCloseSec без ввода. «Место» с незавершённым поиском — ждёт ответа.
   const bool searching = st_.screen == cal_detail::Screen::Place && weather_.searchState() == WeatherClient::Search::Waiting;

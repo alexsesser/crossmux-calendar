@@ -55,6 +55,16 @@ class WeatherClient {
   const char* searchQuery() const { return searchQuery_; }
   int searchCount() const { return nHits_; }
   const weather_core::GeoHit& searchHit(int i) const { return hits_[i]; }
+  void pickSaved(int i);    // сохранённое место → ручное (и первым в списке)
+  void removeSaved(int i);  // убрать из сохранённых
+
+  // ---- История погоды (экран «День», прошедшие даты; даты — год*10000 + месяц*100 + день).
+  enum class Hist : uint8_t { None, Waiting, Failed };
+  // Смотрят прошедший день date: архивной записи нет — загрузить из архива (сразу ±3 дня, чтобы листание соседних
+  // дней не требовало новых запросов). today — сегодняшняя дата.
+  void wantHistory(int32_t date, int32_t today);
+  Hist historyState(int32_t date) const;
+  const weather_core::HistStore& history() const { return hist_; }
 
   // Что сейчас на экране: открыт ли вложенный экран и сколько мс нет ввода. Плановый запрос не начинается, пока идёт ввод.
   void setUi(bool detailOpen, uint32_t idleMs) {
@@ -65,6 +75,7 @@ class WeatherClient {
   void wantYear(int year) { wantYear_ = (year >= calendar_core::kMinYear && year <= calendar_core::kMaxYear) ? year : 0; }
   // Обновить погоду сейчас (кнопка Confirm на экране «Погода»): не ждёт ни паузы без ввода, ни таймера повтора.
   void requestRefresh() { forceRefresh_ = true; }
+  bool refreshing() const { return forceRefresh_ || wxInJob_; }  // погода сейчас загружается
 
  private:
   struct Job;  // данные задачи: вход, результат, флаг готовности (см. .cpp)
@@ -75,6 +86,8 @@ class WeatherClient {
   void saveHolidays();
   void loadSettings();
   void saveSettings(bool lockHeld = false);
+  void loadHistory();
+  void saveHistory();
   void applyEffectivePlace();  // cache_.place ← ручное / по IP; погода для другого места — сбросить и загрузить заново
   bool weatherDue(uint32_t nowEpoch) const;
   bool holidayWorkPending(uint32_t nowEpoch) const;
@@ -105,4 +118,13 @@ class WeatherClient {
   weather_core::GeoHit hits_[weather_core::kMaxGeoHits];
   int nHits_ = 0;
   Job* job_ = nullptr;              // идущая задача (владелец — мы, пока она не отброшена)
+  weather_core::HistStore hist_;
+  bool histDirty_ = false;
+  bool wxInJob_ = false;            // идущая задача загружает погоду
+  int32_t histWant_ = 0;            // какой прошедший день нужен (0 — никакой)
+  int32_t histToday_ = 0;
+  bool histQueued_ = false;         // запрос архива ещё не отправлен в сеть
+  bool histInJob_ = false;          // идущая задача грузит архив для histWant_
+  int32_t histFailed_ = 0;          // для этого дня архив не загрузился…
+  uint32_t histFailedMs_ = 0;       // …тогда (millis): повтор не раньше kRetryAfterFailMin
 };

@@ -103,6 +103,8 @@ const char* routeName(Route r) {
       return "Open-Meteo по HTTP";
     case Route::MetNo:
       return "MET Norway";
+    case Route::OpenMeteoAlt:
+      return "Open-Meteo, другой сервер";
   }
   return "?";
 }
@@ -165,12 +167,13 @@ int buildNominatimUrl(const char* query, Lang lang, char* buf, size_t size) {
                    "&format=jsonv2&limit=%d&featureType=settlement&accept-language=%s", lang, buf, size);
 }
 
-int buildForecastUrl(double lat, double lon, char* buf, size_t size, bool https) {
-  char where[128];
+int buildForecastUrl(double lat, double lon, char* buf, size_t size, bool https, const char* host) {
+  char where[160];
   if (https) {
     std::snprintf(where, sizeof(where), "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f", lat, lon);
   } else {
-    std::snprintf(where, sizeof(where), "http://api.open-meteo.com/v1/forecast?latitude=%.2f&longitude=%.2f", lat, lon);
+    std::snprintf(where, sizeof(where), "http://%s/v1/forecast?latitude=%.2f&longitude=%.2f",
+                  host && host[0] ? host : "api.open-meteo.com", lat, lon);
   }
   return std::snprintf(buf, size,
                        "%s"

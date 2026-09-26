@@ -56,7 +56,7 @@ bool get(const Request& rq, std::string& out, Result& r) {
   // шифрование (TLS). Лишнее соединение стоит одного обмена пакетами.
   WiFiClient plain;
   t = millis();
-  const bool tcpOk = plain.connect(ip, u.port, static_cast<int32_t>(rq.stageTimeoutMs)) != 0;
+  const bool tcpOk = plain.connect(ip, u.port, static_cast<int32_t>(rq.connectTimeoutMs)) != 0;
   r.tcpMs = millis() - t;
   if (!tcpOk) return finish(Stage::Tcp);
 
@@ -66,7 +66,7 @@ bool get(const Request& rq, std::string& out, Result& r) {
     plain.stop();
     if (aborted()) return finish(Stage::Aborted);
     tls.setInsecure();
-    tls.setTimeout(rq.stageTimeoutMs);  // на TCP и на рукопожатие; не вышло — клиент прошивки ещё раз пробует TLS 1.2
+    tls.setTimeout(rq.connectTimeoutMs);  // на TCP и на рукопожатие; не вышло — клиент прошивки ещё раз пробует TLS 1.2
     t = millis();
     const bool ok = tls.connect(u.host.c_str(), u.port) != 0;
     r.tlsMs = millis() - t;
@@ -79,7 +79,7 @@ bool get(const Request& rq, std::string& out, Result& r) {
   req += "GET ";
   req += u.path;
   req += " HTTP/1.1\r\nHost: ";
-  req += u.host;
+  req += rq.hostHeader ? rq.hostHeader : u.host.c_str();
   req += "\r\nUser-Agent: ";
   req += calendar_config::kHttpUserAgent;
   req += "\r\nAccept: application/json\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n";

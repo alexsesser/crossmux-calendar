@@ -286,6 +286,9 @@ int main(int argc, char** argv) {
   {
     char u[700];
     CHECK(buildForecastUrl(55.7558, 37.6173, u, sizeof(u), false) > 0 && std::string(u).rfind("http://api.open-meteo.com/v1/forecast?latitude=55.76&longitude=37.62&", 0) == 0);
+    CHECK(buildForecastUrl(55.7558, 37.6173, u, sizeof(u), false, "167.114.211.86") > 0 &&
+          std::string(u).rfind("http://167.114.211.86/v1/forecast?latitude=55.76&longitude=37.62&", 0) == 0);
+    CHECK(std::string(routeName(Route::OpenMeteoAlt)).find("Open-Meteo") == 0);
     CHECK(buildMetNoUrl(55.75581, 37.61733, u, sizeof(u)) > 0 &&
           std::string(u) == "https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=55.7558&lon=37.6173");
     CHECK(buildNominatimUrl("Нижний Новгород", Lang::Ru, u, sizeof(u)) > 0 &&
@@ -305,12 +308,12 @@ int main(int argc, char** argv) {
     c.fc.h[0].ts = 100;
     c.fc.h[0].mm = 0.3f;
     c.fc.h[1].ts = 3700;
-    c.route = Route::MetNo;
+    c.route = Route::OpenMeteoAlt;
     c.routeAt = 12345;
     const std::string s = serializeCache(c);
     Cache r;
     CHECK(parseCache(s.data(), s.size(), r));
-    CHECK(r.weather.provider == Provider::MetNo && r.fc.provider == Provider::MetNo && r.route == Route::MetNo && r.routeAt == 12345);
+    CHECK(r.weather.provider == Provider::MetNo && r.fc.provider == Provider::MetNo && r.route == Route::OpenMeteoAlt && r.routeAt == 12345);
     CHECK(std::fabs(r.fc.h[0].mm - 0.3f) < 1e-4 && std::isnan(r.fc.h[1].mm));
     Cache d;  // по умолчанию — Open-Meteo, основной путь; в файле этих полей нет
     const std::string sd = serializeCache(d);

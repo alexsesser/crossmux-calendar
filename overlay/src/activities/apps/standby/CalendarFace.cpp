@@ -454,18 +454,7 @@ void CalendarFace::onExit() {
   cal_log::line("FACE", "календарь закрыт (%s)", leavingStandby ? "выход из стендбая" : "другая грань");
   active_ = nullptr;
   weather_.stop(leavingStandby);  // идущий выход в сеть сам быстро закончит и выключит Wi-Fi
-  if (renderer_) {
-    // Как кнопка «Обновление экрана» в верхнем меню: следующий кадр — домашний экран, заставка сна, другая грань —
-    // с полной очисткой. На Paper Mono чистит только FULL_REFRESH: HALF драйвер выполняет как обычное быстрое.
-    renderer_->requestNextRefresh(HalDisplay::FULL_REFRESH);
-    // Заставка сна сначала рисует «Засыпаю…» ПОВЕРХ текущего кадра (это и получает полную очистку), а обложку — уже
-    // быстрым обновлением. Сотрём календарь заранее, чтобы полной очисткой ушёл именно он, а не остался следом цифр
-    // под обложкой. Кроме режимов сна, которые оставляют на экране последний кадр как есть.
-    const uint8_t sm = SETTINGS.sleepScreen;
-    if (leavingStandby && sm != CrossPointSettings::QUICK_RESUME && sm != CrossPointSettings::TRANSPARENT) {
-      renderer_->clearScreen();
-    }
-  }
+  // Полной очистки (белый экран) при выходе больше нет: след цифр под обложкой она не убирала (§13.10), а мигала.
   cal_log::pump(/*forceFlush=*/true, /*lockHeld=*/leavingStandby);
   renderer_ = nullptr;
   snap_ = Snapshot{};

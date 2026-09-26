@@ -58,18 +58,22 @@ class CalendarFace final : public StandbyFace {
   void shiftYear(int delta);
   void shiftHalf(int delta);
   void showMonth(int year, unsigned month);
-  cal_detail::Ctx makeCtx(const cal_draw::Today& t, calendar_core::Lang lang) const;
+  void openCitySearch();  // клавиатура «найти город» поверх стендбая (экран «Место»)
+  void requestCleanup(const char* why);  // следующий кадр — с полной очисткой экрана (см. render())
+  cal_detail::PlaceView placeView() const;
+  cal_detail::Ctx makeCtx(const cal_draw::Today& t, calendar_core::Lang lang, const cal_detail::PlaceView& pv) const;
 
   Snapshot snap_;
   int monthOffset_ = 0;  // относительно текущего месяца
   uint32_t lastNavMs_ = 0;
   unsigned updatesSinceCleanup_ = 0;
-  // true — следующий render() должен попросить HALF_REFRESH вместо обычного FAST_REFRESH: экран целиком сменился
-  // (главный ⇄ вложенный, вложенный ⇄ вложенный) или подошло время планового «ухода отризеринга» (см. render()).
-  // StandbyActivity сама делает это только на Xteink-платах (gpio.isXteinkDevice()); Paper Mono под это не
-  // подпадает, поэтому грань просит перерисовку напрямую через GfxRenderer::requestNextRefresh() — обычный
-  // публичный метод рендерера, не хук.
-  bool wantGhostCleanup_ = false;
+  // Не null — следующий render() просит FULL_REFRESH (как кнопка «Обновление экрана» в верхнем меню) вместо
+  // обычного FAST_REFRESH: экран целиком сменился (главный ⇄ вложенный) или подошла плановая чистка. Строка — причина
+  // для журнала. Через GfxRenderer::requestNextRefresh() — обычный публичный метод рендерера, не хук.
+  const char* cleanupWhy_ = nullptr;
+  uint32_t lastBeatMs_ = 0;       // последняя строка «состояние» в журнале
+  bool keyboardOpen_ = false;     // открыта клавиатура «найти город» (грань ждёт ответ в tick())
+  MappedInputManager* input_ = nullptr;  // из handleInput(): нужен клавиатуре
 
 
   cal_detail::State st_;    // какой экран открыт, страница, дата, год

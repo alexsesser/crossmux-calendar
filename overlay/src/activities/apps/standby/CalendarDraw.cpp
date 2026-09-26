@@ -289,6 +289,16 @@ void drawGlyph(const GfxRenderer& r, Glyph g, int x, int y, int s) {
       disc(r, cx, ccy, rad, Color::Black);
       break;
     }
+    case Glyph::Pin: {  // метка на карте: круг с дыркой и острие вниз
+      const int rad = std::max(3, s * 30 / 100), ccy = y + s * 36 / 100, tip = y + s * 96 / 100;
+      for (int yy = ccy; yy <= tip; ++yy) {  // острие: сужающийся к низу треугольник
+        const int hw = (tip - yy) * rad * 8 / 10 / std::max(1, tip - ccy);
+        r.fillRect(cx - hw, yy, 2 * hw + 1, 1, true);
+      }
+      disc(r, cx, ccy, rad, Color::Black);
+      disc(r, cx, ccy, std::max(1, rad * 40 / 100), Color::White);
+      break;
+    }
     case Glyph::Daylight: {  // дуга пути солнца над горизонтом: слева восход, справа закат, на вершине — солнце
       const int w = s * 3 / 2, hy = y + s * 82 / 100, ccx = x + w / 2;
       const int rad = std::min(w / 2 - 3, hy - y - std::max(3, s / 8) - 1);

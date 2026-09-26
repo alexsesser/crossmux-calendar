@@ -8,12 +8,12 @@
 #include "HolidayCore.h"
 #include "WeatherCore.h"
 
-// Вложенные экраны грани «Календарь»: «Погода» (сегодня по часам и 7 дней), «День», «Год».
+// Вложенные экраны грани «Календарь»: «Погода» (сегодня по часам и 7 дней), «День», «Год», «Место».
 // Рисуются в обеих ориентациях; заодно заполняют карту тап-зон — геометрия отрисовки и хит-теста из одного места
 // (правило CrossMux №11): разбор тапа смотрит в ту же карту, которую только что заполнил render().
 namespace cal_detail {
 
-enum class Screen : uint8_t { Main, Weather, Day, Year };
+enum class Screen : uint8_t { Main, Weather, Day, Year, Place };
 
 enum class Act : uint8_t {
   None,
@@ -26,6 +26,13 @@ enum class Act : uint8_t {
   Next,         // › следующий (день)
   OpenWeek,     // карточка погоды дня → «Погода», 7 дней
   OpenMonth,    // «Год» → главный на этом месяце; arg = год*100 + месяц
+  OpenPlace,    // «Погода»: тап по названию города → «Место»
+  SetAuto,      // «Место»: определять по IP
+  SetManual,    // «Место»: вручную
+  SearchCity,   // «Место»: найти город по названию (клавиатура)
+  PinIp,        // «Место»: город по IP → ручное место
+  PickHit,      // «Место»: выбрать найденный город; arg = номер
+  ToggleLog,    // «Место»: журнал на SD вкл/выкл
 };
 
 struct Hit {
@@ -74,15 +81,30 @@ struct State {
   uint8_t half = 0;  // «Год»: полугодие (0 — январь–июнь, 1 — июль–декабрь): 12 месяцев на 480×800 не читаются
 };
 
+// Экран «Место»: режим, что сказал сервис геолокации, ручное место, поиск города, журнал. Собирает грань.
+enum class SearchState : uint8_t { Idle, Waiting, Found, NotFound, Failed };
+struct PlaceView {
+  bool autoLocation = true;
+  const weather_core::Place* ip = nullptr;      // fromIp == false — по IP ещё не определялось
+  const weather_core::Place* manual = nullptr;
+  SearchState search = SearchState::Idle;
+  const char* query = "";
+  int nHits = 0;
+  const weather_core::GeoHit* hits = nullptr;
+  bool sdLog = false;
+  const char* logDir = "";
+};
+
 // Всё, что нужно для рисования, кроме самого состояния экрана.
 struct Ctx {
   const cal_draw::Today& t;
   calendar_core::Lang lang;
   const weather_core::Cache& wx;
   const holiday_core::Store& hol;
+  const PlaceView& place;
 };
 
-// Рисует вложенный экран s.screen (Weather / Day / Year) и заполняет карту тап-зон.
+// Рисует вложенный экран s.screen (Weather / Day / Year / Place) и заполняет карту тап-зон.
 void draw(GfxRenderer& r, const Rect& vp, const State& s, const Ctx& c, HitMap& hit);
 
 // Подпись дня недели/даты «Пн 21» и т.п. вынесены в реализацию. Классификация дня с учётом выключателя праздников:

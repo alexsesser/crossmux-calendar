@@ -102,7 +102,8 @@ constexpr int kMaxItems = 6;
 
 // ---- Значки вместо слов (мин / макс / ветер / осадки / восход / закат): читаются издалека и не отнимают ширину ----
 // TempMin/TempMax рисуются как «t↓» / «t↑» (буква t — температура), Daylight — дуга солнца от восхода (слева) к закату (справа).
-enum class Glyph : uint8_t { None, TempMin, TempMax, Wind, Drop, Sunrise, Sunset, Daylight };
+// Pin — метка на карте: место задано вручную (экран «Место»).
+enum class Glyph : uint8_t { None, TempMin, TempMax, Wind, Drop, Sunrise, Sunset, Daylight, Pin };
 // Значок (кроме «t↓/t↑», их рисует drawGlyphText) в прямоугольнике высотой s с левым верхним углом (x, y); Daylight шире (1,5 s).
 void drawGlyph(const GfxRenderer& r, Glyph g, int x, int y, int s);
 // Сторона значка для шрифта: чуть выше строки текста.

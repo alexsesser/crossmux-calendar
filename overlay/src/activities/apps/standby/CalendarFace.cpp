@@ -2,8 +2,11 @@
 
 #include <Arduino.h>
 #include <GfxRenderer.h>
+#include <HalPowerManager.h>
 #include <I18n.h>
 #include <Logging.h>
+#include <Memory.h>
+#include <WiFi.h>
 
 #include <algorithm>
 #include <cmath>
@@ -16,12 +19,15 @@
 #include "CalendarCore.h"
 #include "CalendarDetail.h"
 #include "CalendarDraw.h"
+#include "CalendarLog.h"
 #include "CrossPointSettings.h"
 #include "HolidayCore.h"
 #include "I18nKeys.h"
 #include "SunTimes.h"
 #include "WeatherCore.h"
+#include "activities/ActivityManager.h"
 #include "activities/RenderLock.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "util/TimeUtils.h"
@@ -43,6 +49,51 @@ constexpr int kLandscapeLeftPct = calendar_config::kLandscapeLeftPct;
 constexpr int kMaxRowH = calendar_config::kMaxRowH;
 constexpr int kMinRowH = calendar_config::kMinRowH;
 constexpr int kMinGap = 6;  // правило upstream: зазор между соседними элементами (не настройка)
+
+const char* screenName(cal_detail::Screen s) {
+  switch (s) {
+    case cal_detail::Screen::Main:
+      return "главный";
+    case cal_detail::Screen::Weather:
+      return "погода";
+    case cal_detail::Screen::Day:
+      return "день";
+    case cal_detail::Screen::Year:
+      return "год";
+    case cal_detail::Screen::Place:
+      return "место";
+  }
+  return "?";
+}
+
+// Ответ клавиатуры «найти город». Клавиатура — отдельная активность поверх стендбая; грань при этом жива (стендбай лежит
+// на стеке активностей) и забирает ответ в ближайшем tick() после возврата. Обе стороны — главная задача.
+struct CityMailbox {
+  bool ready = false;
+  bool cancelled = false;
+  std::string text;
+};
+CityMailbox g_cityBox;
+
+// KeyboardEntryActivity отдаёт текст только своей активности-«родителю» (startActivityForResult), а грань — не
+// активность. Поэтому клавиатура — наследник, который сам кладёт ответ в ящик в тот момент, когда её закрыли
+// (onComplete/onCancel делают setResult + finish(), и менеджер активностей ставит смену в очередь).
+class CityEntryActivity final : public KeyboardEntryActivity {
+ public:
+  using KeyboardEntryActivity::KeyboardEntryActivity;
+  void loop() override {
+    KeyboardEntryActivity::loop();
+    if (done_ || !activityManager.isSwitchPending()) return;
+    done_ = true;
+    const auto* kb = std::get_if<KeyboardResult>(&result.data);
+    g_cityBox.cancelled = result.isCancelled || !kb;
+    g_cityBox.text = kb ? kb->text : std::string();
+    g_cityBox.ready = true;
+  }
+
+ private:
+  bool done_ = false;
+};
 
 // ---------------------------------------------------------------------------
 // Информационный блок: время, день недели, дата (2 формата), чипсы. Возвращает занятую высоту.
@@ -116,7 +167,7 @@ void fmtUpdated(char* out, size_t n, const weather_core::Weather& w, const Today
 
 // compact — узкая колонка ландшафта: всё мельче и плотнее, чтобы уместиться по высоте.
 int drawWeatherBlock(GfxRenderer& r, int x, int y, int w, const weather_core::Cache& c, const Today& t, Lang lang, bool bottomRule,
-                     bool compact, cal_detail::HitMap& hit) {
+                     bool compact, bool manualPlace, cal_detail::HitMap& hit) {
   const auto& WL = weather_core::labels(lang);
   const int y0 = y;
   const int pad = compact ? kCompactPad : kSidePad;
@@ -141,8 +192,11 @@ int drawWeatherBlock(GfxRenderer& r, int x, int y, int w, const weather_core::Ca
     if (compact && !stale && !expired) upd[0] = '\0';  // в узкой колонке места нет: свежесть видно и так
     const int updW = upd[0] ? textW(r, kFontSmall, upd) : 0;
     const char* cityRaw = c.place.city[0] ? c.place.city : WL.unknownPlace;
-    const Fit city(r, kFontSmall, cityRaw, inner - updW - (updW ? 12 : 0), kBold);
-    r.drawText(kFontSmall, left, y, city.c_str(), true, kBold);
+    // Место задано вручную (экран «Место») — метка перед названием.
+    const int pinW = manualPlace ? r.getLineHeight(kFontSmall) + 3 : 0;
+    if (manualPlace) drawGlyph(r, Glyph::Pin, left, y, r.getLineHeight(kFontSmall));
+    const Fit city(r, kFontSmall, cityRaw, inner - pinW - updW - (updW ? 12 : 0), kBold);
+    r.drawText(kFontSmall, left + pinW, y, city.c_str(), true, kBold);
     if (upd[0]) r.drawText(kFontSmall, left + inner - updW, y, upd, true);
     y += r.getLineHeight(kFontSmall) + 4;
   }
@@ -380,9 +434,12 @@ bool CalendarFace::takeSnapshot(Snapshot& s) {
 }
 
 void CalendarFace::onEnter() {
+  cal_log::line("FACE", "календарь открыт; заряд %u%%", static_cast<unsigned>(powerManager.getBatteryPercentage()));
   monthOffset_ = 0;
   updatesSinceCleanup_ = 0;
-  wantGhostCleanup_ = false;
+  cleanupWhy_ = nullptr;
+  keyboardOpen_ = false;
+  g_cityBox = CityMailbox{};
   lastNavMs_ = millis();
   lastInputMs_ = millis();
   st_ = cal_detail::State{};
@@ -392,8 +449,24 @@ void CalendarFace::onEnter() {
 }
 
 void CalendarFace::onExit() {
+  // Уходим из стендбая (домой, в сон и т.п.) — менеджер активностей держит RenderLock; смена грани — не держит.
+  const bool leavingStandby = activityManager.isSwitchPending();
+  cal_log::line("FACE", "календарь закрыт (%s)", leavingStandby ? "выход из стендбая" : "другая грань");
   active_ = nullptr;
-  weather_.stop();  // если успели поднять Wi-Fi — выключить
+  weather_.stop(leavingStandby);  // идущий выход в сеть сам быстро закончит и выключит Wi-Fi
+  if (renderer_) {
+    // Как кнопка «Обновление экрана» в верхнем меню: следующий кадр — домашний экран, заставка сна, другая грань —
+    // с полной очисткой. На Paper Mono чистит только FULL_REFRESH: HALF драйвер выполняет как обычное быстрое.
+    renderer_->requestNextRefresh(HalDisplay::FULL_REFRESH);
+    // Заставка сна сначала рисует «Засыпаю…» ПОВЕРХ текущего кадра (это и получает полную очистку), а обложку — уже
+    // быстрым обновлением. Сотрём календарь заранее, чтобы полной очисткой ушёл именно он, а не остался следом цифр
+    // под обложкой. Кроме режимов сна, которые оставляют на экране последний кадр как есть.
+    const uint8_t sm = SETTINGS.sleepScreen;
+    if (leavingStandby && sm != CrossPointSettings::QUICK_RESUME && sm != CrossPointSettings::TRANSPARENT) {
+      renderer_->clearScreen();
+    }
+  }
+  cal_log::pump(/*forceFlush=*/true, /*lockHeld=*/leavingStandby);
   renderer_ = nullptr;
   snap_ = Snapshot{};
   st_ = cal_detail::State{};
@@ -418,10 +491,33 @@ void CalendarFace::onPageNext() { shiftMonth(+1); }
 // ---- Вложенные экраны: состояние и ввод ------------------------------------------------------------------------
 
 void CalendarFace::closeDetail() {
-  // Возврат на главный экран — резкая смена содержимого (карточки/график/сетка → время и месяц); один FAST_REFRESH
-  // этого не отрисует чисто на этой панели, отсюда жалоба «остаётся остаточное изображение».
-  if (st_.screen != cal_detail::Screen::Main) wantGhostCleanup_ = true;
+  // Возврат на главный экран — резкая смена содержимого (карточки/график/сетка → время и месяц); быстрое обновление
+  // этой панели оставляет остаточное изображение.
+  if (st_.screen != cal_detail::Screen::Main) {
+    cal_log::line("UI", "экран: %s -> главный", screenName(st_.screen));
+    requestCleanup("возврат на главный");
+  }
   st_.screen = cal_detail::Screen::Main;
+}
+
+void CalendarFace::requestCleanup(const char* why) { cleanupWhy_ = why; }
+
+void CalendarFace::openCitySearch() {
+  if (!renderer_ || !input_) return;
+  // Заголовок клавиатуры рисуется шрифтом без кириллицы (CONCEPT §4.6) — латиницей.
+  auto kb = makeUniqueNoThrow<CityEntryActivity>(*renderer_, *input_, currentLang() == Lang::De ? "Ort" : "City",
+                                                 std::string(), 40, InputType::Text);
+  if (!kb) {
+    LOG_ERR("STANDBY", "OOM: city keyboard");
+    cal_log::line("UI", "нет памяти под клавиатуру");
+    return;
+  }
+  g_cityBox = CityMailbox{};
+  keyboardOpen_ = true;
+  renderer_->requestNextRefresh(HalDisplay::FULL_REFRESH);  // клавиатура поверх календаря — с полной очисткой
+  requestCleanup("возврат с клавиатуры");                   // и обратно — тоже
+  cal_log::line("UI", "клавиатура: поиск города");
+  activityManager.pushActivity(std::move(kb));
 }
 
 void CalendarFace::shiftDay(int days) {
@@ -485,7 +581,33 @@ void CalendarFace::applyHit(const cal_detail::Hit& h) {
       break;
     }
     case Act::Close:
-      closeDetail();
+      if (st_.screen == Screen::Place) {  // «Место» открывается с «Погоды» — туда и возвращаемся
+        st_.screen = Screen::Weather;
+        st_.page = 0;
+      } else {
+        closeDetail();
+      }
+      break;
+    case Act::OpenPlace:
+      st_.screen = Screen::Place;
+      break;
+    case Act::SetAuto:
+      weather_.setAutoLocation(true);
+      break;
+    case Act::SetManual:
+      weather_.setAutoLocation(false);
+      break;
+    case Act::SearchCity:
+      openCitySearch();
+      break;
+    case Act::PinIp:
+      weather_.pinIpPlace();
+      break;
+    case Act::PickHit:
+      weather_.pickSearchHit(h.arg);
+      break;
+    case Act::ToggleLog:
+      weather_.setSdLog(!weather_.settings().sdLog);
       break;
     case Act::GoToday:
       st_.dayY = snap_.year;
@@ -507,11 +629,17 @@ void CalendarFace::applyHit(const cal_detail::Hit& h) {
       break;
   }
   // Тип экрана поменялся (главный ⇄ вложенный, «День» ⇄ «Погода» по тапу на карточке…) — так же резко, как и закрытие.
-  if (st_.screen != prevScreen) wantGhostCleanup_ = true;
+  // Возврат на главный уже записал и заказал closeDetail().
+  if (st_.screen != prevScreen && st_.screen != Screen::Main) {
+    cal_log::line("UI", "экран: %s -> %s", screenName(prevScreen), screenName(st_.screen));
+    requestCleanup("смена экрана");
+  }
 }
 
 bool CalendarFace::handleInput(MappedInputManager& input, bool /*immersive*/) {
-  return active_ != nullptr && active_->onInput(input);
+  if (!active_) return false;
+  active_->input_ = &input;
+  return active_->onInput(input);
 }
 
 bool CalendarFace::onInput(MappedInputManager& in) {
@@ -548,7 +676,7 @@ bool CalendarFace::onInput(MappedInputManager& in) {
 
   lastInputMs_ = millis();
   if (back) {
-    closeDetail();
+    applyHit({0, 0, 0, 0, cal_detail::Act::Close, 0});  // «Место» → «Погода», остальные → главный
     return true;
   }
   // Направления: «следующее» — палец влево / кнопка Right; вертикально — палец вверх / кнопка Down (как у активности).
@@ -575,6 +703,11 @@ bool CalendarFace::onInput(MappedInputManager& in) {
       if (vPrev) shiftYear(-1);
       if (conf) applyHit({0, 0, 0, 0, cal_detail::Act::GoToday, 0});
       break;
+    case Screen::Place:  // кнопками: ← авто, → вручную, Confirm — найти город
+      if (bl) weather_.setAutoLocation(true);
+      if (br) weather_.setAutoLocation(false);
+      if (conf) openCitySearch();
+      break;
     case Screen::Main:
       break;
   }
@@ -584,13 +717,71 @@ bool CalendarFace::onInput(MappedInputManager& in) {
   return true;  // на вложенном экране поглощаем весь ввод
 }
 
-cal_detail::Ctx CalendarFace::makeCtx(const cal_draw::Today& t, calendar_core::Lang lang) const {
-  return cal_detail::Ctx{t, lang, weather_.cache(), weather_.holidays()};
+cal_detail::PlaceView CalendarFace::placeView() const {
+  cal_detail::PlaceView pv;
+  const weather_core::Settings& set = weather_.settings();
+  pv.autoLocation = set.autoLocation;
+  pv.ip = &weather_.ipPlace();
+  pv.manual = &set.manual;
+  switch (weather_.searchState()) {
+    case WeatherClient::Search::Idle:
+      pv.search = cal_detail::SearchState::Idle;
+      break;
+    case WeatherClient::Search::Waiting:
+      pv.search = cal_detail::SearchState::Waiting;
+      break;
+    case WeatherClient::Search::Found:
+      pv.search = cal_detail::SearchState::Found;
+      break;
+    case WeatherClient::Search::NotFound:
+      pv.search = cal_detail::SearchState::NotFound;
+      break;
+    case WeatherClient::Search::Failed:
+      pv.search = cal_detail::SearchState::Failed;
+      break;
+  }
+  pv.query = weather_.searchQuery();
+  pv.nHits = weather_.searchCount();
+  pv.hits = pv.nHits ? &weather_.searchHit(0) : nullptr;
+  pv.sdLog = set.sdLog;
+  pv.logDir = cal_log::dirPath();
+  return pv;
+}
+
+cal_detail::Ctx CalendarFace::makeCtx(const cal_draw::Today& t, calendar_core::Lang lang,
+                                      const cal_detail::PlaceView& pv) const {
+  return cal_detail::Ctx{t, lang, weather_.cache(), weather_.holidays(), pv};
 }
 
 // ---- Такт ---------------------------------------------------------------------------------------------------------
 
 StandbyFace::TickResult CalendarFace::tick() {
+  cal_log::pump();  // журнал: сообщения прошивки + раз в kSdLogFlushSec запись на карту
+
+  // Вернулись с клавиатуры «найти город»: координаты — сразу ручное место, название — искать в сети.
+  if (g_cityBox.ready) {
+    g_cityBox.ready = false;
+    keyboardOpen_ = false;
+    lastInputMs_ = millis();  // пока была клавиатура, tick() не вызывался: не закрыть «Место» по таймауту сразу
+    if (!g_cityBox.cancelled && !g_cityBox.text.empty()) {
+      RenderLock lock;  // меняем то, что читает render()
+      double la = 0, lo = 0;
+      if (weather_core::parseCoords(g_cityBox.text.c_str(), la, lo)) {
+        weather_core::Place p;
+        std::snprintf(p.city, sizeof(p.city), "%.4f, %.4f", la, lo);
+        p.lat = la;
+        p.lon = lo;
+        weather_.clearSearch();
+        weather_.setManualPlace(p);
+      } else {
+        weather_.startSearch(g_cityBox.text.c_str());
+      }
+    } else {
+      cal_log::line("UI", "клавиатура закрыта без ввода");
+    }
+    return TickResult::Redraw;
+  }
+
   const bool hadClock = snap_.valid;
   const uint32_t prevMinute = snap_.minuteKey;
   const uint32_t prevDay = snap_.dayKey;
@@ -601,10 +792,23 @@ StandbyFace::TickResult CalendarFace::tick() {
 
   const bool detail = st_.screen != cal_detail::Screen::Main;
 
-  // Вложенный экран закрывается сам после kDetailAutoCloseSec без ввода.
-  if (detail && millis() - lastInputMs_ >= calendar_config::kDetailAutoCloseSec * 1000u) {
+  // Вложенный экран закрывается сам после kDetailAutoCloseSec без ввода. «Место» с незавершённым поиском — ждёт ответа.
+  const bool searching = st_.screen == cal_detail::Screen::Place && weather_.searchState() == WeatherClient::Search::Waiting;
+  if (detail && !searching && millis() - lastInputMs_ >= calendar_config::kDetailAutoCloseSec * 1000u) {
+    RenderLock lock;  // st_ читает render()
     closeDetail();
     return TickResult::RedrawWithGhostCleanup;
+  }
+
+  // Раз в 10 минут — состояние в журнал: видно, что устройство живо, чем заряжено, что с Wi-Fi и погодой.
+  if (cal_log::enabled() && (lastBeatMs_ == 0 || millis() - lastBeatMs_ >= 10u * 60u * 1000u)) {
+    lastBeatMs_ = millis();
+    const auto& w = weather_.cache().weather;
+    const long age = (w.valid && snap_.epoch >= w.fetchedEpoch) ? static_cast<long>((snap_.epoch - w.fetchedEpoch) / 60) : -1;
+    cal_log::line("BEAT", "заряд %u%%, память %u, Wi-Fi режим %d статус %d, экран %s, место %s «%s», погоде %ld мин",
+                  static_cast<unsigned>(powerManager.getBatteryPercentage()), static_cast<unsigned>(ESP.getFreeHeap()),
+                  static_cast<int>(WiFi.getMode()), static_cast<int>(WiFi.status()), screenName(st_.screen),
+                  weather_.settings().autoLocation ? "авто" : "вручную", weather_.cache().place.city, age);
   }
 
   // Что смотрит пользователь → какой год производственного календаря нужен (если его нет в кэше — запросим по требованию).
@@ -634,15 +838,14 @@ StandbyFace::TickResult CalendarFace::tick() {
 
   if (snap_.dayKey != prevDay) {
     updatesSinceCleanup_ = 0;
-    // RedrawWithGhostCleanup доходит до HALF_REFRESH только на Xteink-платах (StandbyActivity сама решает так);
-    // на Paper Mono просим то же самое сами — см. wantGhostCleanup_ в render().
-    wantGhostCleanup_ = true;
+    // RedrawWithGhostCleanup StandbyActivity выполняет только на Xteink-платах; на Paper Mono просим очистку сами.
+    requestCleanup("полночь");
     return TickResult::RedrawWithGhostCleanup;  // полночь: сетка и дата меняются целиком
   }
   if (snap_.minuteKey != prevMinute) {
-    if (++updatesSinceCleanup_ >= calendar_config::kGhostCleanupEveryUpdates) {
+    if (calendar_config::kGhostCleanupEveryUpdates && ++updatesSinceCleanup_ >= calendar_config::kGhostCleanupEveryUpdates) {
       updatesSinceCleanup_ = 0;
-      wantGhostCleanup_ = true;  // плановая чистка: время и сегодняшняя плашка стоят на месте много минут подряд
+      requestCleanup("плановая");  // время и сегодняшняя плашка стоят на месте много минут подряд
       return TickResult::RedrawWithGhostCleanup;
     }
     return TickResult::Redraw;
@@ -661,16 +864,14 @@ uint32_t CalendarFace::secondsUntilNextWake() const {
 
 void CalendarFace::render(GfxRenderer& r, const Rect& vp) {
   renderer_ = &r;
-  if (wantGhostCleanup_) {
-    // StandbyActivity::render() вызывает r.displayBuffer() сразу после этого render() и без override берёт
-    // FAST_REFRESH; requestNextRefresh() — обычный публичный метод GfxRenderer (не хук), он подменит режим этого
-    // одного кадра на HALF_REFRESH, что на партиях чёрного (крупное время, плашка «сегодня», карточки вложенных
-    // экранов) чистит остаточное изображение, которое FAST_REFRESH не трогает. Тот же режим StandbyActivity сама
-    // использует для RedrawWithGhostCleanup на Xteink-платах — здесь просим его напрямую, потому что Paper Mono
-    // под тот путь не попадает (gpio.isXteinkDevice() == false).
-    r.requestNextRefresh(HalDisplay::HALF_REFRESH);
-    wantGhostCleanup_ = false;
-    LOG_DBG("STANDBY", "Calendar: HALF_REFRESH requested (ghost cleanup)");
+  if (cleanupWhy_) {
+    // StandbyActivity::render() вызывает r.displayBuffer() сразу после этого render() и без подмены берёт
+    // FAST_REFRESH. requestNextRefresh() — обычный публичный метод GfxRenderer (не хук): этот один кадр пойдёт
+    // FULL_REFRESH — так же, как по кнопке «Обновление экрана» в верхнем меню (FrontlightPanelActivity). Драйвер
+    // Paper Mono чистит остаточное изображение только им: HALF_REFRESH он выполняет как обычное быстрое обновление.
+    r.requestNextRefresh(HalDisplay::FULL_REFRESH);
+    cal_log::line("EPD", "полная очистка экрана (%s)", cleanupWhy_);
+    cleanupWhy_ = nullptr;
   }
   ensureDigitFonts(r);
   const Lang lang = currentLang();
@@ -685,7 +886,8 @@ void CalendarFace::render(GfxRenderer& r, const Rect& vp) {
   const Today t{snap_.year,    snap_.month,      snap_.day,        snap_.hour,       snap_.minute,
                 snap_.weekday, snap_.dayOfYear,  snap_.isoWeek,    snap_.daysInYear, snap_.utcOffsetMin,
                 snap_.epoch};
-  const cal_detail::Ctx ctx = makeCtx(t, lang);
+  const cal_detail::PlaceView pv = placeView();
+  const cal_detail::Ctx ctx = makeCtx(t, lang, pv);
 
   if (st_.screen != cal_detail::Screen::Main) {
     cal_detail::draw(r, vp, st_, ctx, hit_);
@@ -705,7 +907,7 @@ void CalendarFace::render(GfxRenderer& r, const Rect& vp) {
   if (landscape) {
     const int leftW = vp.width * kLandscapeLeftPct / 100;
     const int infoH = drawInfoBlock(r, kFontTimeL, kTimeLTopOffset, kTimeLDigitH, vp.x, top, leftW, t, lang, kCompactPad);
-    drawWeatherBlock(r, vp.x, top + infoH, leftW, wx, t, lang, /*bottomRule=*/false, /*compact=*/true, hit_);
+    drawWeatherBlock(r, vp.x, top + infoH, leftW, wx, t, lang, /*bottomRule=*/false, /*compact=*/true, !pv.autoLocation, hit_);
     // Точки-пейджер внизу стоят по центру экрана, правее левой колонки, — разделитель идёт до самого низа.
     r.drawLine(vp.x + leftW, vp.y + kTopReserve, vp.x + leftW, vp.y + vp.height - 8, 2, true);
     const int gx = vp.x + leftW + kSidePad;
@@ -716,7 +918,8 @@ void CalendarFace::render(GfxRenderer& r, const Rect& vp) {
 
   // Портрет: время и дата, погода, сетка месяца книзу.
   const int infoH = drawInfoBlock(r, kFontTimeXl, kTimeXlTopOffset, kTimeXlDigitH, vp.x, top, vp.width, t, lang, kSidePad);
-  const int wxH = drawWeatherBlock(r, vp.x, top + infoH, vp.width, wx, t, lang, /*bottomRule=*/true, /*compact=*/false, hit_);
+  const int wxH = drawWeatherBlock(r, vp.x, top + infoH, vp.width, wx, t, lang, /*bottomRule=*/true, /*compact=*/false,
+                                   !pv.autoLocation, hit_);
 
   MonthGrid probe;
   calendar_core::buildMonthGrid(viewYear, viewMonth, probe);

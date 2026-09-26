@@ -8,6 +8,7 @@
 #   orient      ориентации 1/2/3 из настроек (как плитка в шторке)
 #   month       листание (6-строчный август) и Immersive
 #   docs        кадры для README: Москва (мок геолокации и прогноза) + живой календарь праздников
+#   docs_place  кадр экрана «Место» для README (подложенные данные, поиск города — мок)
 #   hang        сеть «зависла» (прокси в никуда): экран и тапы должны работать, пока сетевая задача ждёт
 #   holidays_offline нет сети и календаря: май 2026 и 2027 — только выходные и фиксированные праздники
 #   detail_land то же в ландшафте (погода ×2, день, год)
@@ -120,6 +121,23 @@ PY
       # (Первое из пяти «вверх» лишь будит Immersive.) Первые ≈ 20 с — тишина: идут два сетевых цикла (погода + первые 3 года календаря, затем ещё 3 года предзагрузки).
       CROSSPOINT_SIM_HTTP_MOCK_ROOT="$OUT/mock" run "1500:BACK;22000:TAP:240,330;24500:SWIPE:400,400,100,400;27000:BACK;33000:UP;33500:UP;34000:UP;34500:UP;35000:UP;36500:TAP:360,604;38500:BACK;39000:TAP:240,487;41500:QUIT" \
           "21000:$OUT/docs_1_main.bmp;24000:$OUT/docs_2_weather_today.bmp;26500:$OUT/docs_3_weather_week.bmp;36000:$OUT/docs_4_may.bmp;38000:$OUT/docs_5_day.bmp;41000:$OUT/docs_6_year.bmp" ;;
+    docs_place)
+      # Экран «Место» для README: по IP — «чужой» город через офисную сеть (данные подложены в кэш, настоящий IP не нужен),
+      # вручную — Москва; поиск «москва» с экранной клавиатуры (ответ Open-Meteo Geocoding — из tests/data, мок).
+      wifi_saved; cache_clear; mkdir -p "$OUT/mock"
+      cp "$ROOT/tests/data/openmeteo_moscow_7d.json" "$OUT/mock/forecast"
+      cp "$ROOT/tests/data/geocode_moskva_ru.json" "$OUT/mock/search"
+      python3 - "$FS/calendar_cache.json" "$FS/calendar_settings.json" <<'PY'
+import json, sys, time
+json.dump({"v": 2, "place": {"lat": 50.1109, "lon": 8.6821, "city": "Франкфурт-на-Майне", "ip": 1, "ipAt": int(time.time()) - 600,
+           "ipLang": 1, "ssid": "Office-WiFi"}}, open(sys.argv[1], "w"), ensure_ascii=False)
+json.dump({"v": 1, "auto": False, "log": True, "manual": {"city": "Москва", "lat": 55.7558, "lon": 37.6173}},
+          open(sys.argv[2], "w"), ensure_ascii=False)
+PY
+      # Тапы клавиатуры (русская раскладка, портрет): м о с к в а, затем OK.
+      CROSSPOINT_SIM_HTTP_MOCK_ROOT="$OUT/mock" run "1500:BACK;9000:TAP:240,330;11500:TAP:275,57;14000:TAP:122,410;16500:TAP:200,720;17300:TAP:280,675;18100:TAP:162,720;18900:TAP:143,627;19700:TAP:118,675;20500:TAP:158,675;21500:TAP:418,770;29000:QUIT" \
+          "28500:$OUT/docs_7_place.bmp"
+      rm -f "$FS/calendar_settings.json" ;;
     docs_land)
       wifi_saved; cache_clear; mkdir -p "$OUT/mock"; set_orientation 3
       cp "$ROOT/tests/data/openmeteo_moscow_7d.json" "$OUT/mock/forecast"

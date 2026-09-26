@@ -11,6 +11,7 @@ g++ -std=c++17 -O1 -Wall -Wextra -I"$SRC" dump_sun.cpp "$SRC/CalendarCore.cpp" "
 python3 verify_sun.py build/dump_sun
 
 g++ -std=c++17 -O1 -Wall -Wextra test_wifi.cpp -o build/test_wifi && ./build/test_wifi
+g++ -std=c++17 -O1 -Wall -Wextra test_log.cpp -o build/test_log && ./build/test_log
 
 # Погода: нужен ArduinoJson (лежит в libdeps после первой сборки прошивки)
 AJ=""

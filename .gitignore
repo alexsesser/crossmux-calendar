@@ -4,3 +4,4 @@ tests/build/
 __pycache__/
 shots/
 .claude/
+logs/

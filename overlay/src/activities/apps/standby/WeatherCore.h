@@ -26,8 +26,15 @@ struct Place {
   bool fromIp = false;        // false — значение по умолчанию, IP-определение ещё не удавалось
   uint32_t ipEpoch = 0;       // когда место определено по IP
   uint8_t ipLang = 0;         // на каком языке получено название (calendar_core::Lang)
-  Place() { copyUtf8(city, sizeof(city), kDefaultCity); }
+  char ssid[33];              // через какую Wi-Fi-сеть определено по IP: сеть сменилась (дом ⇄ работа) — определяем заново
+  Place() {
+    copyUtf8(city, sizeof(city), kDefaultCity);
+    ssid[0] = '\0';
+  }
 };
+
+// Координаты рядом (≈ 5 км) — одно и то же место для погоды.
+bool samePlace(double lat1, double lon1, double lat2, double lon2);
 
 // Поле, которого нет, — NaN: интерфейс рисует заглушку именно для него, а не для всего блока.
 struct Weather {
@@ -42,6 +49,9 @@ struct Weather {
   int16_t code = -1;          // WMO (-1 — нет данных)
   bool isDay = true;
   uint32_t fetchedEpoch = 0;
+  // Для каких координат получена: место сменилось (ручное ⇄ по IP, другой город) — эти данные не показываем.
+  double atLat = NAN;
+  double atLon = NAN;
 };
 
 // Прогноз для подробных экранов: ближайшие 24 часа и 7 дней (сегодня + 6). Отсутствующие поля — NaN / -1.
@@ -118,6 +128,30 @@ bool parseForecast(const char* json, size_t len, uint32_t nowEpoch, Weather& out
 
 std::string serializeCache(const Cache& c);
 bool parseCache(const char* json, size_t len, Cache& out);  // при false out не меняется
+
+// ---- Настройки, которые меняются на устройстве (экран «Место») ----------------------------------------------------
+// Лежат на SD отдельно от кэша (удалить кэш — настройки останутся). Начальные значения — из CalendarConfig.h.
+struct Settings {
+  bool autoLocation = calendar_config::kLocationAutoByDefault;  // true — место по IP, false — вручную
+  Place manual;                                               // место «вручную»; по умолчанию — kDefaultCity
+  bool sdLog = calendar_config::kSdLogByDefault;              // подробный журнал на SD-карту
+};
+std::string serializeSettings(const Settings& s);
+bool parseSettings(const char* json, size_t len, Settings& out);  // при false out не меняется
+
+// ---- Поиск города по названию: Open-Meteo Geocoding API (без ключа, CC BY 4.0) ------------------------------------
+struct GeoHit {
+  char name[48];    // «Москва»
+  char region[80];  // «Москва, Россия» / «Айдахо, США»
+  double lat = 0, lon = 0;
+};
+constexpr int kMaxGeoHits = 5;
+// Длина URL или -1, если не влезло. Запрос кодируется (UTF-8 → %XX), язык названий — как у интерфейса.
+int buildGeocodeUrl(const char* query, calendar_core::Lang lang, char* buf, size_t size);
+// Число найденных мест (0 — ничего не найдено) или -1 — ответ не разобрать.
+int parseGeocode(const char* json, size_t len, GeoHit* out, int maxOut);
+// Координаты текстом: «55.75, 37.62», «55,75 37,62», «55.75;37.62». false — это не координаты (или вне диапазона).
+bool parseCoords(const char* text, double& lat, double& lon);
 
 // copyUtf8 (объявлена выше): обрезка UTF-8 до dstSize-1 байт по границе символа + завершающий ноль.
 

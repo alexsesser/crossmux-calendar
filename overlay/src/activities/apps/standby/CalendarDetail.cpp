@@ -55,23 +55,48 @@ struct Txt {
   const char* noFcHint;
   const char* hourly;    // «сегодня»-страница: заголовок по часам
   const char* cap;       // подпись под графиком
+  // Экран «Место». Без «—» и «…»: этих знаков нет во всех подмножествах шрифта (см. kDash).
+  const char* placeTitle;
+  const char* modeAuto;
+  const char* modeManual;
+  const char* byIp;
+  const char* ipNever;
+  const char* ipVia;     // %s сеть, %s когда
+  const char* pinIp;
+  const char* findCity;
+  const char* searching;  // %s запрос
+  const char* pick;
+  const char* notFound;  // %s запрос
+  const char* failed;
+  const char* logOn;
+  const char* logOff;
+  const char* logHint;   // %s папка
 };
 
 const Txt kRu = {"Назад", "Сегодня", "сегодня", "завтра", "вчера", "через %d дн.", "%d дн. назад", "День",
                  "Солнце", "Луна", "Погода", "освещена %d %%", "лунный день %d", "Полнолуние", "новолуние",
                  "%c%d мин к вчера", "Прогноз доступен на 7 дней вперёд", "7 дней",
                  "Загрузится при подключении к Wi-Fi", "сегодня",
-                 "Температура · осадки % · ночь"};
+                 "Температура · осадки % · ночь",
+                 "Место", "Авто (по IP)", "Вручную", "По IP", "ещё не определялось", "сеть «%s» · %s",
+                 "Взять этот город", "Найти город", "Ищу «%s»...", "Выберите город:", "Не найдено: «%s»",
+                 "Поиск не удался: нет сети?", "Журнал на SD: вкл", "Журнал на SD: выкл", "%s"};
 const Txt kEn = {"Back", "Today", "today", "tomorrow", "yesterday", "in %d days", "%d days ago", "Day",
                  "Sun", "Moon", "Weather", "%d %% lit", "lunar day %d", "Full moon", "new moon",
                  "%c%d min vs yesterday", "Forecast covers the next 7 days", "7 days",
                  "Loads when Wi-Fi is available", "today",
-                 "Temp. · rain % · night"};
+                 "Temp. · rain % · night",
+                 "Location", "Auto (by IP)", "Manual", "By IP", "not detected yet", "network \"%s\" · %s",
+                 "Use this city", "Find city", "Searching \"%s\"...", "Pick a city:", "Not found: \"%s\"",
+                 "Search failed: no network?", "SD log: on", "SD log: off", "%s"};
 const Txt kDe = {"Zurück", "Heute", "heute", "morgen", "gestern", "in %d Tagen", "vor %d Tagen", "Tag",
                  "Sonne", "Mond", "Wetter", "%d %% hell", "Mondtag %d", "Vollmond", "Neumond",
                  "%c%d Min zu gestern", "Vorhersage für die nächsten 7 Tage", "7 Tage",
                  "Wird bei WLAN geladen", "heute",
-                 "Temp. · Regen % · Nacht"};
+                 "Temp. · Regen % · Nacht",
+                 "Ort", "Auto (per IP)", "Manuell", "Per IP", "noch nicht ermittelt", "Netz \"%s\" · %s",
+                 "Diesen Ort nehmen", "Ort suchen", "Suche \"%s\"...", "Ort wählen:", "Nicht gefunden: \"%s\"",
+                 "Suche fehlgeschlagen: kein Netz?", "SD-Log: an", "SD-Log: aus", "%s"};
 
 const Txt& txt(Lang l) { return l == Lang::Ru ? kRu : l == Lang::De ? kDe : kEn; }
 
@@ -110,7 +135,9 @@ int chip(GfxRenderer& r, int x, int y, int h, const char* label, bool filled, in
 enum class Right { None, Dots, Today, TodayFilled };
 
 // Шапка: «< Назад» · заголовок · (точки страниц | «Сегодня»). Возвращает y под шапкой.
-int drawHeader(GfxRenderer& r, const Frame& f, const Txt& T, const char* title, Right right, int dotsOn, HitMap& hit) {
+// titleAct — заголовок тоже кнопка (на «Погоде» — открыть «Место»); pin — метка «место задано вручную» перед ним.
+int drawHeader(GfxRenderer& r, const Frame& f, const Txt& T, const char* title, Right right, int dotsOn, HitMap& hit,
+               Act titleAct = Act::None, bool pin = false) {
   const int pad = calendar_config::kSidePad;
   const int y = f.y;
   const int cy = y + (kHdrH - kChipH) / 2;
@@ -138,8 +165,15 @@ int drawHeader(GfxRenderer& r, const Frame& f, const Txt& T, const char* title, 
   }
   // Название — по центру свободного места между кнопкой «Назад» и правым элементом.
   const int tl = f.x + pad + bw + 12, tr = f.x + f.w - pad - rw - 12;
-  const Fit tt(r, kFontText, title, tr - tl, kBold);
-  drawCentered(r, kFontText, tl, tr - tl, y + (kHdrH - lineH(r, kFontText)) / 2, tt.c_str(), true, kBold);
+  const int gs = pin ? glyphSize(r, kFontText) : 0, gw = pin ? gs + 4 : 0;
+  const Fit tt(r, kFontText, title, tr - tl - gw, kBold);
+  int tx = tl + (tr - tl - gw - textW(r, kFontText, tt.c_str(), kBold)) / 2;
+  if (pin) {
+    drawGlyph(r, Glyph::Pin, tx, y + (kHdrH - gs) / 2, gs);
+    tx += gw;
+  }
+  r.drawText(kFontText, tx, y + (kHdrH - lineH(r, kFontText)) / 2, tt.c_str(), true, kBold);
+  if (titleAct != Act::None) hit.add(tl, y, tr - tl, kHdrH, titleAct);
   r.drawLine(f.x + pad, y + kHdrH, f.x + f.w - pad, y + kHdrH, 2, true);
   return y + kHdrH + 8;
 }
@@ -539,7 +573,7 @@ void drawWeather(GfxRenderer& r, const Frame& f, const State& s, const Ctx& c, H
   const Txt& T = txt(c.lang);
   const WxView v = wxView(c);
   const char* title = c.wx.place.city[0] ? c.wx.place.city : weather_core::labels(c.lang).unknownPlace;
-  int y = drawHeader(r, f, T, title, Right::Dots, s.page, hit);
+  int y = drawHeader(r, f, T, title, Right::Dots, s.page, hit, Act::OpenPlace, !c.place.autoLocation);
   if (s.page == 0) drawWeatherToday(r, f, c, T, v, y); else drawWeatherWeek(r, f, c, T, v, y);
 
   // Подвал: обновлено + подсказка соседней страницы.
@@ -894,6 +928,138 @@ void drawYear(GfxRenderer& r, const Frame& f, const State& s, const Ctx& c, HitM
   }
 }
 
+
+// ---- «Место» ----------------------------------------------------------------------------------------------------
+
+// «14:02» сегодня, «25.09 14:02» — другой день.
+void fmtWhen(uint32_t epoch, const Ctx& c, char* out, size_t n) {
+  out[0] = '\0';
+  std::tm lt{};
+  if (!epoch || !TimeUtils::getLocalDateTime(epoch, lt)) return;
+  if (lt.tm_mday == static_cast<int>(c.t.day) && lt.tm_mon + 1 == static_cast<int>(c.t.month)) {
+    std::snprintf(out, n, "%02d:%02d", lt.tm_hour, lt.tm_min);
+  } else {
+    std::snprintf(out, n, "%02d.%02d %02d:%02d", lt.tm_mday, lt.tm_mon + 1, lt.tm_hour, lt.tm_min);
+  }
+}
+
+// Крупная жирная строка и мелкая под ней, обе обрезаны по ширине. Возвращает новую y.
+int twoLines(GfxRenderer& r, int x, int y, int w, const char* big, const char* small) {
+  const Fit a(r, kFontText, big, w, kBold);
+  r.drawText(kFontText, x, y, a.c_str(), true, kBold);
+  y += lineH(r, kFontText) + 2;
+  if (small && small[0]) {
+    const Fit b(r, kFontSmall, small, w);
+    r.drawText(kFontSmall, x, y, b.c_str(), true);
+    y += lineH(r, kFontSmall) + 2;
+  }
+  return y;
+}
+
+// Режим (авто / вручную), что сказал сервис геолокации, ручное место, поиск города, журнал на SD.
+// Портрет — одной колонкой; ландшафт — слева режим и места, справа поиск и журнал.
+void drawPlace(GfxRenderer& r, const Frame& f, const Ctx& c, HitMap& hit) {
+  const Txt& T = txt(c.lang);
+  const PlaceView& pv = c.place;
+  const int y0 = drawHeader(r, f, T, T.placeTitle, Right::None, 0, hit);
+  const int pad = calendar_config::kSidePad;
+  const int lhT = lineH(r, kFontText), lhS = lineH(r, kFontSmall);
+  constexpr int kBtnH = 44, kGap = 12;
+  int lx = f.x + pad, lw = f.w - 2 * pad, ly = y0;
+  if (f.land) lw = (f.w - 2 * pad - 24) / 2;
+
+  // Переключатель режима: выбранный — чёрный.
+  const int bw = (lw - kGap) / 2;
+  chip(r, lx, ly, kBtnH, T.modeAuto, pv.autoLocation, bw);
+  hit.add(lx, ly, bw, kBtnH, Act::SetAuto);
+  chip(r, lx + bw + kGap, ly, kBtnH, T.modeManual, !pv.autoLocation, bw);
+  hit.add(lx + bw + kGap, ly, bw, kBtnH, Act::SetManual);
+  ly += kBtnH + 12;
+
+  // Что сказал сервис геолокации — видно и в режиме «Вручную» (например, в офисе IP «уводит» в другую страну).
+  {
+    Card k = beginCard(r, lx, ly, lw, T.byIp);
+    const bool known = pv.ip && pv.ip->fromIp;
+    char info[112] = "";
+    if (known) {
+      char when[24];
+      fmtWhen(pv.ip->ipEpoch, c, when, sizeof(when));
+      std::snprintf(info, sizeof(info), T.ipVia, pv.ip->ssid[0] ? pv.ip->ssid : "?", when);
+    }
+    k.cy = twoLines(r, lx + 12, k.cy, lw - 24, known ? (pv.ip->city[0] ? pv.ip->city : "?") : T.ipNever, info);
+    if (known) {
+      k.cy += 4;
+      const int w = chip(r, lx + 12, k.cy, kChipH, T.pinIp, false);
+      hit.add(lx + 8, k.cy - 3, w + 8, kChipH + 6, Act::PinIp);
+      k.cy += kChipH + 2;
+    }
+    ly += endCard(r, k);
+  }
+  // Место «вручную» и поиск города.
+  {
+    Card k = beginCard(r, lx, ly, lw, T.modeManual);
+    char coords[48] = "";
+    if (pv.manual) std::snprintf(coords, sizeof(coords), "%.4f, %.4f", pv.manual->lat, pv.manual->lon);
+    k.cy = twoLines(r, lx + 12, k.cy, lw - 24, pv.manual && pv.manual->city[0] ? pv.manual->city : "?", coords);
+    k.cy += 4;
+    const int w = chip(r, lx + 12, k.cy, kChipH, T.findCity, false);
+    hit.add(lx + 8, k.cy - 3, w + 8, kChipH + 6, Act::SearchCity);
+    k.cy += kChipH + 2;
+    ly += endCard(r, k);
+  }
+
+  // Правая колонка (ландшафт) или продолжение (портрет): поиск, внизу — журнал.
+  const int rx = f.land ? lx + lw + 24 : lx;
+  const int rw = lw;
+  int ry = f.land ? y0 : ly;
+  const int logY = f.bottom - kChipH - 2;
+  if (pv.search != SearchState::Idle) {
+    char st[112];
+    switch (pv.search) {
+      case SearchState::Waiting:
+        std::snprintf(st, sizeof(st), T.searching, pv.query);
+        break;
+      case SearchState::Found:
+        std::snprintf(st, sizeof(st), "%s", T.pick);
+        break;
+      case SearchState::NotFound:
+        std::snprintf(st, sizeof(st), T.notFound, pv.query);
+        break;
+      default:
+        std::snprintf(st, sizeof(st), "%s", T.failed);
+        break;
+    }
+    const Fit t(r, kFontSmall, st, rw, kBold);
+    r.drawText(kFontSmall, rx, ry, t.c_str(), true, kBold);
+    ry += lhS + 6;
+    if (pv.search == SearchState::Found) {
+      // Одной строкой «Город  Регион, Страна» — чтобы все kMaxGeoHits вариантов помещались и в портрете.
+      const int rowH = lhS + 18;
+      for (int i = 0; i < pv.nHits && ry + rowH <= logY - 8; ++i) {
+        const weather_core::GeoHit& h = pv.hits[i];
+        r.drawRoundedRect(rx, ry, rw, rowH, 2, 10, true);
+        const int ty = ry + (rowH - lhS) / 2;
+        const Fit name(r, kFontSmall, h.name, rw / 2, kBold);
+        r.drawText(kFontSmall, rx + 12, ty, name.c_str(), true, kBold);
+        const int nx = rx + 12 + textW(r, kFontSmall, name.c_str(), kBold) + 10;
+        const Fit reg(r, kFontSmall, h.region, rx + rw - 12 - nx);
+        r.drawText(kFontSmall, nx, ty, reg.c_str(), true);
+        hit.add(rx, ry, rw, rowH, Act::PickHit, i);
+        ry += rowH + 6;
+      }
+    }
+  }
+
+  // Журнал на SD — внизу, всегда на одном месте.
+  char hint[64];
+  std::snprintf(hint, sizeof(hint), T.logHint, pv.logDir);
+  const int w = chip(r, rx, logY, kChipH, pv.sdLog ? T.logOn : T.logOff, pv.sdLog);
+  hit.add(rx - 4, logY - 3, w + 8, kChipH + 6, Act::ToggleLog);
+  if (textW(r, kFontSmall, hint) <= rw - w - 12) {  // путь к папке — только целиком (в узкой колонке ландшафта не влезает)
+    r.drawText(kFontSmall, rx + w + 12, logY + (kChipH - lhS) / 2, hint, true);
+  }
+}
+
 }  // namespace
 
 void draw(GfxRenderer& r, const Rect& vp, const State& s, const Ctx& c, HitMap& hit) {
@@ -907,6 +1073,9 @@ void draw(GfxRenderer& r, const Rect& vp, const State& s, const Ctx& c, HitMap& 
       break;
     case Screen::Year:
       drawYear(r, f, s, c, hit);
+      break;
+    case Screen::Place:
+      drawPlace(r, f, c, hit);
       break;
     case Screen::Main:
       break;

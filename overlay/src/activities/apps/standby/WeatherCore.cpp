@@ -3,7 +3,9 @@
 #include <ArduinoJson.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace weather_core {
@@ -86,9 +88,37 @@ const Labels& labels(Lang lang) { return lang == Lang::Ru ? kLabelsRu : lang == 
 
 // ---- URL --------------------------------------------------------------------
 
+namespace {
+const char* langCode(Lang lang) { return lang == Lang::Ru ? "ru" : lang == Lang::De ? "de" : "en"; }
+}  // namespace
+
 int buildGeoUrl(Lang lang, char* buf, size_t size) {
-  const char* l = lang == Lang::Ru ? "ru" : lang == Lang::De ? "de" : "en";
-  return std::snprintf(buf, size, "https://ipwhois.app/json/?lang=%s&objects=success,city,latitude,longitude", l);
+  // ip/region/country в разборе не нужны — только для журнала: видно, куда сервис «поставил» адрес (офисный прокси и т.п.).
+  return std::snprintf(buf, size,
+                       "https://ipwhois.app/json/?lang=%s&objects=success,ip,city,region,country,latitude,longitude",
+                       langCode(lang));
+}
+
+int buildGeocodeUrl(const char* query, Lang lang, char* buf, size_t size) {
+  static constexpr char kHex[] = "0123456789ABCDEF";
+  const int head = std::snprintf(buf, size, "https://geocoding-api.open-meteo.com/v1/search?name=");
+  if (head < 0 || static_cast<size_t>(head) >= size) return -1;
+  size_t o = static_cast<size_t>(head);
+  for (const unsigned char* p = reinterpret_cast<const unsigned char*>(query); *p; ++p) {
+    const bool plain = *p < 0x80 && std::isalnum(*p);
+    const bool unreserved = plain || *p == '-' || *p == '_' || *p == '.' || *p == '~';
+    if (o + (unreserved ? 1 : 3) >= size) return -1;
+    if (unreserved) {
+      buf[o++] = static_cast<char>(*p);
+    } else {
+      buf[o++] = '%';
+      buf[o++] = kHex[*p >> 4];
+      buf[o++] = kHex[*p & 0x0F];
+    }
+  }
+  const int tail = std::snprintf(buf + o, size - o, "&count=%d&language=%s&format=json", kMaxGeoHits, langCode(lang));
+  if (tail < 0 || o + static_cast<size_t>(tail) >= size) return -1;
+  return static_cast<int>(o + static_cast<size_t>(tail));
 }
 
 int buildForecastUrl(double lat, double lon, char* buf, size_t size) {
@@ -143,6 +173,94 @@ bool parseGeo(const char* json, size_t len, Lang lang, uint32_t nowEpoch, Place&
   out.fromIp = true;
   out.ipEpoch = nowEpoch;
   out.ipLang = static_cast<uint8_t>(lang);
+  return true;
+}
+
+bool samePlace(double lat1, double lon1, double lat2, double lon2) {
+  if (std::isnan(lat1) || std::isnan(lon1) || std::isnan(lat2) || std::isnan(lon2)) return false;
+  return std::fabs(lat1 - lat2) < 0.05 && std::fabs(lon1 - lon2) < 0.05;  // 0,05° ≈ 5,5 км по широте
+}
+
+int parseGeocode(const char* json, size_t len, GeoHit* out, int maxOut) {
+  // Фильтр: у мест бывают длинные списки почтовых индексов и т.п. — в документ берём только нужное.
+  JsonDocument filter;
+  JsonObject f = filter["results"].add<JsonObject>();
+  f["name"] = true;
+  f["latitude"] = true;
+  f["longitude"] = true;
+  f["admin1"] = true;
+  f["country"] = true;
+  JsonDocument doc;
+  if (deserializeJson(doc, json, len, DeserializationOption::Filter(filter))) return -1;
+  if (!doc.is<JsonObject>()) return -1;
+  JsonArrayConst arr = doc["results"].as<JsonArrayConst>();  // нет ключа — ничего не найдено
+  int n = 0;
+  for (JsonVariantConst r : arr) {
+    if (n >= maxOut) break;
+    if (!r["latitude"].is<double>() || !r["longitude"].is<double>()) continue;
+    const double lat = r["latitude"].as<double>(), lon = r["longitude"].as<double>();
+    const char* name = r["name"] | "";
+    if (!validCoord(lat, lon) || !name[0]) continue;
+    GeoHit& h = out[n++];
+    copyUtf8(h.name, sizeof(h.name), name);
+    const char* a1 = r["admin1"] | "";
+    const char* co = r["country"] | "";
+    char region[sizeof(h.region)];
+    // «Москва, Россия»; регион совпадает с названием города — всё равно пишем: так видно, что это столица региона.
+    std::snprintf(region, sizeof(region), "%s%s%s", a1, (a1[0] && co[0]) ? ", " : "", co);
+    copyUtf8(h.region, sizeof(h.region), region);
+    h.lat = lat;
+    h.lon = lon;
+  }
+  return n;
+}
+
+bool parseCoords(const char* text, double& lat, double& lon) {
+  // Нормализуем: «;» и пробелы — разделители; запятая — десятичная, если есть другой разделитель, иначе — разделитель.
+  std::string s(text);
+  const bool hasSemi = s.find(';') != std::string::npos;
+  const bool hasSpace = s.find_first_of(" \t") != std::string::npos;
+  std::string a, b;
+  auto trim = [](std::string v) {
+    const size_t i = v.find_first_not_of(" \t,");
+    const size_t j = v.find_last_not_of(" \t,");
+    return i == std::string::npos ? std::string() : v.substr(i, j - i + 1);
+  };
+  if (hasSemi) {
+    const size_t k = s.find(';');
+    a = trim(s.substr(0, k));
+    b = trim(s.substr(k + 1));
+  } else if (s.find(", ") != std::string::npos) {  // «55.75, 37.62» — самая частая запись
+    const size_t k = s.find(", ");
+    a = trim(s.substr(0, k));
+    b = trim(s.substr(k + 2));
+  } else if (hasSpace) {
+    const std::string t = trim(s);
+    const size_t k = t.find_first_of(" \t");
+    if (k == std::string::npos) return false;
+    a = trim(t.substr(0, k));
+    b = trim(t.substr(k + 1));
+  } else if (std::count(s.begin(), s.end(), ',') == 1) {  // «55.75,37.62»
+    const size_t k = s.find(',');
+    a = trim(s.substr(0, k));
+    b = trim(s.substr(k + 1));
+  } else {
+    return false;
+  }
+  auto num = [](std::string v, double& out) {
+    if (v.empty()) return false;
+    std::replace(v.begin(), v.end(), ',', '.');
+    for (char ch : v) {
+      if (!(std::isdigit(static_cast<unsigned char>(ch)) || ch == '.' || ch == '-' || ch == '+')) return false;
+    }
+    char* end = nullptr;
+    out = std::strtod(v.c_str(), &end);
+    return end && *end == '\0';
+  };
+  double la = 0, lo = 0;
+  if (!num(a, la) || !num(b, lo) || !validCoord(la, lo)) return false;
+  lat = la;
+  lon = lo;
   return true;
 }
 
@@ -234,6 +352,7 @@ std::string serializeCache(const Cache& c) {
   p["ip"] = c.place.fromIp ? 1 : 0;
   p["ipAt"] = c.place.ipEpoch;
   p["ipLang"] = c.place.ipLang;
+  if (c.place.ssid[0]) p["ssid"] = c.place.ssid;
   if (c.weather.valid) {
     JsonObject w = doc["wx"].to<JsonObject>();
     auto put = [&w](const char* k, float v) {
@@ -249,6 +368,10 @@ std::string serializeCache(const Cache& c) {
     if (c.weather.code >= 0) w["c"] = c.weather.code;
     w["d"] = c.weather.isDay ? 1 : 0;
     w["at"] = c.weather.fetchedEpoch;
+    if (!std::isnan(c.weather.atLat) && !std::isnan(c.weather.atLon)) {
+      w["la"] = c.weather.atLat;
+      w["lo"] = c.weather.atLon;
+    }
   }
   if (c.fc.valid) {
     JsonObject f = doc["fc"].to<JsonObject>();
@@ -302,6 +425,7 @@ bool parseCache(const char* json, size_t len, Cache& out) {
   c.place.fromIp = (p["ip"] | 0) != 0;
   c.place.ipEpoch = p["ipAt"] | 0u;
   c.place.ipLang = static_cast<uint8_t>(p["ipLang"] | 0);
+  copyUtf8(c.place.ssid, sizeof(c.place.ssid), p["ssid"] | "");
 
   JsonVariantConst w = doc["wx"];
   if (!w.isNull()) {
@@ -316,6 +440,9 @@ bool parseCache(const char* json, size_t len, Cache& out) {
       c.weather.code = w["c"].is<int>() ? static_cast<int16_t>(w["c"].as<int>()) : -1;
       c.weather.isDay = (w["d"] | 1) != 0;
       c.weather.fetchedEpoch = w["at"] | 0u;
+      // Кэш до появления «la/lo» писал погоду только для того места, что лежит рядом, — к нему и относим.
+      c.weather.atLat = w["la"].is<double>() ? w["la"].as<double>() : lat;
+      c.weather.atLon = w["lo"].is<double>() ? w["lo"].as<double>() : lon;
       c.weather.valid = true;
     }
   }
@@ -351,6 +478,41 @@ bool parseCache(const char* json, size_t len, Cache& out) {
     c.fc.valid = (nh > 0 && c.fc.h[0].ts != 0) || (nd > 0 && c.fc.d[0].ts != 0);
   }
   out = c;
+  return true;
+}
+
+// ---- Настройки -----------------------------------------------------------------
+
+std::string serializeSettings(const Settings& s) {
+  JsonDocument doc;
+  doc["v"] = 1;
+  doc["auto"] = s.autoLocation;
+  doc["log"] = s.sdLog;
+  JsonObject m = doc["manual"].to<JsonObject>();
+  m["city"] = s.manual.city;
+  m["lat"] = s.manual.lat;
+  m["lon"] = s.manual.lon;
+  std::string out;
+  serializeJson(doc, out);
+  return out;
+}
+
+bool parseSettings(const char* json, size_t len, Settings& out) {
+  JsonDocument doc;
+  if (deserializeJson(doc, json, len) || !doc.is<JsonObject>()) return false;
+  Settings s;  // чего нет в файле — значение по умолчанию из CalendarConfig.h
+  if (doc["auto"].is<bool>()) s.autoLocation = doc["auto"].as<bool>();
+  if (doc["log"].is<bool>()) s.sdLog = doc["log"].as<bool>();
+  JsonVariantConst m = doc["manual"];
+  if (m["lat"].is<double>() && m["lon"].is<double>()) {
+    const double lat = m["lat"].as<double>(), lon = m["lon"].as<double>();
+    if (!validCoord(lat, lon)) return false;
+    s.manual.lat = lat;
+    s.manual.lon = lon;
+    copyUtf8(s.manual.city, sizeof(s.manual.city), m["city"] | "");
+  }
+  s.manual.fromIp = false;
+  out = s;
   return true;
 }
 

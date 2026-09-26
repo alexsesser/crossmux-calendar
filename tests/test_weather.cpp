@@ -1,4 +1,5 @@
 // Тесты WeatherCore: настоящие ответы API (tests/data) + негативные случаи. Печатает FAIL-строки; код возврата = число ошибок.
+// Координаты после JSON сравниваем с допуском 1e-4° (≈ 10 м): ArduinoJson 7 хранит короткие числа как float.
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
@@ -115,6 +116,99 @@ int main(int argc, char** argv) {
   // --- URL ---
   { char u[700]; int n = buildForecastUrl(55.7558, 37.6173, u, sizeof(u)); CHECK(n > 0 && n < (int)sizeof(u) && std::string(u).find("latitude=55.7558&longitude=37.6173") != std::string::npos);
     n = buildGeoUrl(Lang::Ru, u, sizeof(u)); CHECK(n > 0 && std::string(u).find("lang=ru") != std::string::npos); }
+  // --- Поиск города (Open-Meteo Geocoding): настоящие ответы ---
+  {
+    const std::string j = slurp((dir + "/geocode_moskva_ru.json").c_str());
+    GeoHit h[kMaxGeoHits];
+    const int n = parseGeocode(j.data(), j.size(), h, kMaxGeoHits);
+    CHECK(n == 4);
+    CHECK(std::string(h[0].name) == "Москва" && std::string(h[0].region) == "Москва, Россия");
+    CHECK(h[0].lat > 55.7 && h[0].lat < 55.8 && h[0].lon > 37.5 && h[0].lon < 37.7);
+    CHECK(std::string(h[1].region) == "Айдахо, США" && h[1].lon < 0);
+    const std::string b = slurp((dir + "/geocode_berlin_de.json").c_str());
+    CHECK(parseGeocode(b.data(), b.size(), h, kMaxGeoHits) == 5 && std::string(h[0].name) == "Berlin");
+    CHECK(parseGeocode(b.data(), b.size(), h, 2) == 2);  // не больше, чем просили
+    const std::string none = slurp((dir + "/geocode_none.json").c_str());
+    CHECK(parseGeocode(none.data(), none.size(), h, kMaxGeoHits) == 0);
+    for (const char* bad : {"", "x", "[]", "{\"results\":"}) CHECK(parseGeocode(bad, std::strlen(bad), h, kMaxGeoHits) == -1);
+    // место без координат или без названия пропускается; регион может быть пустым
+    const char* partial = R"({"results":[{"name":"A"},{"name":"B","latitude":1.5,"longitude":2.5},{"latitude":3,"longitude":4}]})";
+    CHECK(parseGeocode(partial, std::strlen(partial), h, kMaxGeoHits) == 1 && std::string(h[0].name) == "B" && h[0].region[0] == '\0');
+  }
+  // --- URL поиска: кириллица кодируется, пробел — %20, не влезло — -1 ---
+  {
+    char u[300];
+    int n = buildGeocodeUrl("Нижний Новгород", Lang::Ru, u, sizeof(u));
+    CHECK(n > 0 && std::string(u).find("name=%D0%9D%D0%B8%D0%B6%D0%BD%D0%B8%D0%B9%20%D0%9D") != std::string::npos);
+    CHECK(std::string(u).find("&count=5&language=ru&format=json") != std::string::npos && n == (int)std::strlen(u));
+    n = buildGeocodeUrl("St. Petersburg", Lang::En, u, sizeof(u));
+    CHECK(n > 0 && std::string(u).find("name=St.%20Petersburg&") != std::string::npos);
+    char tiny[40];
+    CHECK(buildGeocodeUrl("Москва", Lang::Ru, tiny, sizeof(tiny)) == -1);
+  }
+  // --- Координаты текстом ---
+  {
+    double la = 0, lo = 0;
+    auto near = [](double a, double b) { return std::fabs(a - b) < 1e-9; };
+    CHECK(parseCoords("55.75, 37.62", la, lo) && near(la, 55.75) && near(lo, 37.62));
+    CHECK(parseCoords("55,75 37,62", la, lo) && near(la, 55.75) && near(lo, 37.62));
+    CHECK(parseCoords("55.75;37.62", la, lo) && near(la, 55.75) && near(lo, 37.62));
+    CHECK(parseCoords("55,75; 37,62", la, lo) && near(la, 55.75) && near(lo, 37.62));
+    CHECK(parseCoords("55.75,37.62", la, lo) && near(la, 55.75) && near(lo, 37.62));
+    CHECK(parseCoords(" -33.87  151.21 ", la, lo) && near(la, -33.87) && near(lo, 151.21));
+    la = 1;
+    lo = 2;
+    for (const char* bad : {"", "Москва", "55.75", "91, 10", "10, 181", "55,75,37,62", "a, b", "55.75, 37.62x", "1 2 3"}) {
+      CHECK(!parseCoords(bad, la, lo));
+      CHECK(la == 1 && lo == 2);
+    }
+  }
+  // --- Настройки: круг туда-обратно; пустой файл — значения из CalendarConfig.h; мусор — false ---
+  {
+    Settings s;
+    s.autoLocation = false;
+    s.sdLog = false;
+    copyUtf8(s.manual.city, sizeof(s.manual.city), "Санкт-Петербург");
+    s.manual.lat = 59.94;
+    s.manual.lon = 30.31;
+    const std::string j = serializeSettings(s);
+    Settings r;
+    CHECK(parseSettings(j.data(), j.size(), r));
+    CHECK(!r.autoLocation && !r.sdLog && std::string(r.manual.city) == "Санкт-Петербург" && !r.manual.fromIp);
+    CHECK(std::fabs(r.manual.lat - 59.94) < 1e-4 && std::fabs(r.manual.lon - 30.31) < 1e-4);
+    Settings d;
+    CHECK(parseSettings("{}", 2, d));
+    CHECK(d.autoLocation == calendar_config::kLocationAutoByDefault && d.sdLog == calendar_config::kSdLogByDefault &&
+          d.manual.lat == kDefaultLat && std::string(d.manual.city) == kDefaultCity);
+    Settings keep;
+    keep.sdLog = !calendar_config::kSdLogByDefault;
+    for (const char* bad : {"", "x", "[]", R"({"manual":{"lat":95,"lon":0}})"}) {
+      Settings t = keep;
+      CHECK(!parseSettings(bad, std::strlen(bad), t));
+      CHECK(t.sdLog == keep.sdLog);
+    }
+  }
+  // --- Кэш: сеть геолокации и координаты погоды; в старом кэше погода относится к своему месту ---
+  {
+    Cache c;
+    c.place.lat = 50.11;
+    c.place.lon = 8.68;
+    copyUtf8(c.place.ssid, sizeof(c.place.ssid), "Office-WiFi");
+    c.weather.valid = true;
+    c.weather.temp = 5;
+    c.weather.atLat = 55.75;
+    c.weather.atLon = 37.62;
+    const std::string s = serializeCache(c);
+    Cache r;
+    CHECK(parseCache(s.data(), s.size(), r));
+    CHECK(std::string(r.place.ssid) == "Office-WiFi" && std::fabs(r.weather.atLat - 55.75) < 1e-4 &&
+          std::fabs(r.weather.atLon - 37.62) < 1e-4);
+    const char* old = R"({"v":2,"place":{"lat":10.5,"lon":20.5,"city":"X","ip":1},"wx":{"t":3,"at":7}})";
+    Cache o;
+    CHECK(parseCache(old, std::strlen(old), o));
+    CHECK(o.weather.atLat == 10.5 && o.weather.atLon == 20.5 && o.place.ssid[0] == '\0');
+    CHECK(samePlace(55.75, 37.62, 55.76, 37.60) && !samePlace(55.75, 37.62, 55.85, 37.62) && !samePlace(NAN, 0, 0, 0));
+  }
   std::printf("weather: ошибок %d\n", fails);
   return fails;
 }

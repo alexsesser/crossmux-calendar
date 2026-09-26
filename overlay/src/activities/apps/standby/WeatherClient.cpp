@@ -47,6 +47,9 @@ constexpr uint32_t kNoCredsRetryMs = calendar_config::kRetryNoWifiMin * 60u * 10
 constexpr uint32_t kLowBatteryRetryMs = calendar_config::kRetryLowBatteryMin * 60u * 1000u;
 constexpr uint32_t kHttpStageMs = calendar_config::kHttpStageTimeoutSec * 1000u;
 constexpr uint32_t kHttpConnectMs = calendar_config::kHttpConnectTimeoutSec * 1000u;
+constexpr size_t kMirrors = sizeof(calendar_config::kOpenMeteoMirrorHosts) / sizeof(calendar_config::kOpenMeteoMirrorHosts[0]);
+// С какого из других имён Open-Meteo начинать: с ответившего в прошлый раз (до перезагрузки).
+std::atomic<unsigned> g_mirrorFirst{0};
 // Потолки ответов (не настройки): больше — явно не то.
 constexpr size_t kMaxBody = 8192;          // место, Open-Meteo, календарь: сотни байт … 2 КБ
 constexpr size_t kMaxMetBody = 196608;     // MET Norway «complete»: ≈ 65 КБ JSON (по сети — ≈ 5 КБ gzip)
@@ -160,6 +163,7 @@ struct WeatherClient::Job {
   bool doWeather = false;
   weather_core::Route route = weather_core::Route::OpenMeteoHttps;  // путь, сработавший в прошлый раз
   uint32_t routeAt = 0;
+  bool fullChain = false;       // явная просьба («Обновить»): цепочка путей — с самого начала, с основного
   int32_t utcOffsetSec = 0;     // часы устройства: MET Norway даёт время в UTC, дни считаем по местному
   unsigned nYears = 0;
   int years[kMaxYearsPerJob] = {};
@@ -226,8 +230,8 @@ bool WeatherClient::Job::fetch(const char* url, std::string& out, size_t maxByte
   return ok;
 }
 
-// Погода — по очереди разными путями (weather_core::Route), пока какой-то не сработает: Open-Meteo по HTTPS → он же по
-// HTTP → MET Norway. Серверы — только по именам (DNS), без зашитых адресов. Первым — тот, что сработал в прошлый раз; но запасной
+// Погода — по очереди разными путями (weather_core::Route), пока какой-то не сработает: Open-Meteo по HTTPS → тот же
+// прогноз под другими именами Open-Meteo → основной по HTTP → MET Norway. Серверы — только по именам (DNS), без зашитых адресов. Первым — тот, что сработал в прошлый раз; но запасной
 // путь первым не дольше kWeatherPrimaryRetryMin — потом снова пробуем основной. Бюджет времени (kNetworkBudgetSec) внутри цепочки не проверяется: каждый путь и так
 // ограничен таймаутами этапов, а без погоды выход в сеть бессмыслен.
 bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSize) {
@@ -236,6 +240,8 @@ bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSi
     switch (r) {
       case Route::OpenMeteoHttps:
         return true;
+      case Route::OpenMeteoMirror:
+        return kMirrors > 0 && calendar_config::kOpenMeteoMirrorHosts[0][0] != '\0';
       case Route::OpenMeteoHttp:
         return calendar_config::kWeatherHttpFallback;
       case Route::MetNo:
@@ -243,10 +249,10 @@ bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSi
     }
     return false;
   };
-  static constexpr Route kDefaultOrder[] = {Route::OpenMeteoHttps, Route::OpenMeteoHttp, Route::MetNo};
+  static constexpr Route kDefaultOrder[] = {Route::OpenMeteoHttps, Route::OpenMeteoMirror, Route::OpenMeteoHttp, Route::MetNo};
   Route first = route;
   const bool primaryDue = nowEpoch < routeAt || nowEpoch - routeAt >= calendar_config::kWeatherPrimaryRetryMin * 60u;
-  if (!enabled(first) || (first != Route::OpenMeteoHttps && primaryDue)) first = Route::OpenMeteoHttps;
+  if (!enabled(first) || (first != Route::OpenMeteoHttps && (primaryDue || fullChain))) first = Route::OpenMeteoHttps;
   Route order[weather_core::kRoutes];
   int n = 0;
   order[n++] = first;
@@ -281,6 +287,19 @@ bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSi
         weather_core::buildForecastUrl(target.lat, target.lon, url, urlSize, true);
         attempt("погода (Open-Meteo)", kMaxBody, false);
         break;
+      case Route::OpenMeteoMirror: {
+        const unsigned start = g_mirrorFirst.load() % kMirrors;
+        for (size_t i = 0; i < kMirrors && !parsed && !abandoned(); ++i) {
+          const unsigned idx = static_cast<unsigned>((start + i) % kMirrors);
+          const char* host = calendar_config::kOpenMeteoMirrorHosts[idx];
+          if (!host[0]) continue;
+          char what[80];
+          std::snprintf(what, sizeof(what), "погода (Open-Meteo, %s)", host);
+          weather_core::buildForecastUrl(target.lat, target.lon, url, urlSize, true, host);
+          if (attempt(what, kMaxBody, false)) g_mirrorFirst.store(idx);
+        }
+        break;
+      }
       case Route::OpenMeteoHttp:
         if (mainIpDown) {
           cal_log::line("WX", "погода (Open-Meteo по HTTP): пропущено — этот сервер недоступен и по TCP");
@@ -983,6 +1002,7 @@ void WeatherClient::startJob(GfxRenderer& renderer, uint32_t nowEpoch, calendar_
   j.doWeather = forceRefresh_ || weatherDue(nowEpoch);
   j.route = cache_.route;
   j.routeAt = cache_.routeAt;
+  j.fullChain = forceRefresh_;
   j.utcOffsetSec = (static_cast<int32_t>(SETTINGS.clockUtcOffsetQ) - 48) * 15 * 60;
   if (searchQueued_) weather_core::copyUtf8(j.searchQuery, sizeof(j.searchQuery), searchQuery_);
   if (calendar_config::kHolidaysEnabled && static_cast<int32_t>(millis() - holBackoffUntilMs_) >= 0) {

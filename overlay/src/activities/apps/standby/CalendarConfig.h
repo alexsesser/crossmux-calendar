@@ -58,12 +58,12 @@ constexpr const char* kOpenMeteoAltServers[] = {"167.114.211.86", "188.40.99.226
 //    пропускается). Координаты по HTTP — с точностью ≈ 1 км;
 constexpr bool kWeatherHttpFallback = true;
 //  • MET Norway (api.met.no, Норвежский метеоинститут, CC BY 4.0) — другой сервер в другой сети. Вероятности
-//    осадков у него для России нет (на экране будет «--»), остальное — то же.
+//    осадков у него для России нет (на экране вместо % — мм), остальное — то же. Обновляется так же, раз в
+//    kWeatherRefreshMin (сам прогноз у MET меняется примерно раз в час).
 constexpr bool kWeatherMetNoFallback = true;
-// Путь, который сработал, в следующий раз пробуется первым. Запасной — не дольше этого (часы), потом снова Open-Meteo.
-constexpr unsigned kWeatherPrimaryRetryHours = 12;
-// MET Norway просит не спрашивать чаще, чем меняется прогноз: с ним погода обновляется не чаще этого (минуты).
-constexpr unsigned kMetNoMinRefreshMin = 30;
+// Путь, который сработал, в следующий раз пробуется первым. Запасной — не дольше этого (минуты), потом снова с начала
+// цепочки: Open-Meteo, его другие серверы… Если основной сервер недоступен, такая проверка стоит до ≈ 15 с Wi-Fi.
+constexpr unsigned kWeatherPrimaryRetryMin = 60;
 // Ниже этого заряда (%) плановые выходы в сеть отпускаются (кнопка Confirm на «Погоде» — в любом случае).
 constexpr unsigned kMinBatteryPctForNetwork = 10;
 constexpr unsigned kRetryLowBatteryMin = 30;

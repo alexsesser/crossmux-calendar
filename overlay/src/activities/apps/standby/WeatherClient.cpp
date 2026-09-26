@@ -226,7 +226,7 @@ bool WeatherClient::Job::fetch(const char* url, std::string& out, size_t maxByte
 
 // Погода — по очереди разными путями (weather_core::Route), пока какой-то не сработает: Open-Meteo по HTTPS → другие
 // серверы Open-Meteo по IP → тот же сервер по HTTP → MET Norway. Первым — тот, что сработал в прошлый раз; но запасной
-// путь первым не дольше kWeatherPrimaryRetryHours — потом снова пробуем основной. Бюджет времени (kNetworkBudgetSec) внутри цепочки не проверяется: каждый путь и так
+// путь первым не дольше kWeatherPrimaryRetryMin — потом снова пробуем основной. Бюджет времени (kNetworkBudgetSec) внутри цепочки не проверяется: каждый путь и так
 // ограничен таймаутами этапов, а без погоды выход в сеть бессмыслен.
 bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSize) {
   using weather_core::Route;
@@ -245,7 +245,7 @@ bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSi
   };
   static constexpr Route kDefaultOrder[] = {Route::OpenMeteoHttps, Route::OpenMeteoAlt, Route::OpenMeteoHttp, Route::MetNo};
   Route first = route;
-  const bool primaryDue = nowEpoch < routeAt || nowEpoch - routeAt >= calendar_config::kWeatherPrimaryRetryHours * 3600u;
+  const bool primaryDue = nowEpoch < routeAt || nowEpoch - routeAt >= calendar_config::kWeatherPrimaryRetryMin * 60u;
   if (!enabled(first) || (first != Route::OpenMeteoHttps && primaryDue)) first = Route::OpenMeteoHttps;
   Route order[weather_core::kRoutes];
   int n = 0;
@@ -760,11 +760,7 @@ bool WeatherClient::weatherDue(uint32_t nowEpoch) const {
   const weather_core::Weather& w = cache_.weather;
   if (!w.valid || w.fetchedEpoch == 0) return true;
   if (nowEpoch < w.fetchedEpoch) return true;  // часы «ушли назад» — данным нельзя верить
-  // MET Norway обновляет прогноз раз в час и просит не опрашивать чаще нужного.
-  const unsigned everyMin = w.provider == weather_core::Provider::MetNo
-                                ? std::max(calendar_config::kWeatherRefreshMin, calendar_config::kMetNoMinRefreshMin)
-                                : calendar_config::kWeatherRefreshMin;
-  return nowEpoch - w.fetchedEpoch >= everyMin * 60u;
+  return nowEpoch - w.fetchedEpoch >= calendar_config::kWeatherRefreshMin * 60u;  // любой источник — одинаково
 }
 
 // Есть ли что догрузить из производственного календаря: год, который смотрит пользователь, либо предзагрузка
@@ -968,7 +964,7 @@ void WeatherClient::applyJob(Job& j, uint32_t nowEpoch) {
     }
     if (j.wxOk) {
       // Сработавший путь — первым в следующий раз. Отсчёт «сколько он первый» — с момента, когда он стал первым или
-      // когда основной путь снова не сработал (иначе после kWeatherPrimaryRetryHours основной пробовался бы каждый раз).
+      // когда основной путь снова не сработал (иначе после kWeatherPrimaryRetryMin основной пробовался бы каждый раз).
       if (j.wxRoute != cache_.route) {
         cal_log::line("WX", "погода теперь через %s (было: %s)", weather_core::routeName(j.wxRoute),
                       weather_core::routeName(cache_.route));

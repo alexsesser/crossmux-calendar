@@ -106,7 +106,7 @@ struct Cache {
   Weather weather;
   Forecast fc;
   Route route = Route::OpenMeteoHttps;  // каким путём погода пришла в последний раз — его пробуем первым
-  uint32_t routeAt = 0;                 // с какого момента этот путь первый (через kWeatherPrimaryRetryHours — снова Open-Meteo)
+  uint32_t routeAt = 0;                 // с какого момента этот путь первый (через kWeatherPrimaryRetryMin — снова Open-Meteo)
 };
 
 enum class Icon : uint8_t {

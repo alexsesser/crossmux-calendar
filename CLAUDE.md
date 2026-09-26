@@ -7,7 +7,8 @@
 - `hooks/apply_hooks.py` — идемпотентные правки upstream (см. концепцию, §5.1)
 - `design/calendar-interactive-mockup.html` — кликабельный прототип тапа по погоде и календарю (концепция — CONCEPT.md §12)
 - `overlay/` — наш код, копируется в `work/` как есть: `CalendarFace` (главный экран, состояние, ввод), `CalendarDetail` (экраны «Погода/День/Год/Место», карта тап-зон), `CalendarLog` (журнал на SD, CONCEPT §13.8), `CalendarDraw` (общая отрисовка), `HolidayCore` (праздники и переносы), `MoonPhase`, `CalendarCore` (логика, host-тесты), `SunTimes`,
-  `WeatherCore` (разбор JSON, коды WMO, кэш — host-тесты), `WeatherClient` (Wi-Fi + HTTP в отдельной задаче, место авто/вручную, поиск города; из `tick()` грани),
+  `WeatherCore` (разбор JSON Open-Meteo/MET Norway/Nominatim, коды WMO, кэш — host-тесты), `WeatherClient` (Wi-Fi + запросы в отдельной задаче, запасные пути к погоде, место авто/вручную, поиск города; из `tick()` грани),
+  `CalendarHttp` (HTTP(S) с разбором по этапам DNS/TCP/TLS/ответ для журнала, короткие таймауты, gzip), `HttpCore` (чистая часть HTTP и gunzip — host-тест),
   `CalendarOrientation` (хук 3), `overlay/src/CalmodWifi.*` (Wi-Fi Enterprise: логин+пароль, хуки 5–9, CONCEPT §13.5), `CalendarConfig` (ЕДИНСТВЕННЫЙ файл настроек: интервалы, город по умолчанию, раскладка, размеры шрифта, порядок граней — новые настраиваемые числа добавлять только сюда, не в другие файлы), `CalendarFonts.h` (СГЕНЕРИРОВАН tools/gen_digit_fonts.sh — руками не править)
 - `scripts/` — `sync.sh` (клон+overlay+хуки), `overlay.sh` (быстро накатить overlay на готовый `work/`), `build.sh`,
   `sim.sh`, `shots.sh` (скриншоты из симулятора без окна), `flash.sh`,

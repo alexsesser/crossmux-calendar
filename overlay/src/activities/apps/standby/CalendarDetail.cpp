@@ -55,6 +55,7 @@ struct Txt {
   const char* noFcHint;
   const char* hourly;    // «сегодня»-страница: заголовок по часам
   const char* cap;       // подпись под графиком
+  const char* capMm;     // она же, когда столбики — количество осадков (MET Norway: вероятности нет)
   // Экран «Место». Без «—» и «…»: этих знаков нет во всех подмножествах шрифта (см. kDash).
   const char* placeTitle;
   const char* modeAuto;
@@ -77,7 +78,7 @@ const Txt kRu = {"Назад", "Сегодня", "сегодня", "завтра
                  "Солнце", "Луна", "Погода", "освещена %d %%", "лунный день %d", "Полнолуние", "новолуние",
                  "%c%d мин к вчера", "Прогноз доступен на 7 дней вперёд", "7 дней",
                  "Загрузится при подключении к Wi-Fi", "сегодня",
-                 "Температура · осадки % · ночь",
+                 "Температура · осадки % · ночь", "Температура · осадки мм · ночь",
                  "Место", "Авто (по IP)", "Вручную", "По IP", "ещё не определялось", "сеть «%s» · %s",
                  "Взять этот город", "Найти город", "Ищу «%s»...", "Выберите город:", "Не найдено: «%s»",
                  "Поиск не удался: нет сети?", "Журнал на SD: вкл", "Журнал на SD: выкл", "%s"};
@@ -85,7 +86,7 @@ const Txt kEn = {"Back", "Today", "today", "tomorrow", "yesterday", "in %d days"
                  "Sun", "Moon", "Weather", "%d %% lit", "lunar day %d", "Full moon", "new moon",
                  "%c%d min vs yesterday", "Forecast covers the next 7 days", "7 days",
                  "Loads when Wi-Fi is available", "today",
-                 "Temp. · rain % · night",
+                 "Temp. · rain % · night", "Temp. · rain mm · night",
                  "Location", "Auto (by IP)", "Manual", "By IP", "not detected yet", "network \"%s\" · %s",
                  "Use this city", "Find city", "Searching \"%s\"...", "Pick a city:", "Not found: \"%s\"",
                  "Search failed: no network?", "SD log: on", "SD log: off", "%s"};
@@ -93,7 +94,7 @@ const Txt kDe = {"Zurück", "Heute", "heute", "morgen", "gestern", "in %d Tagen"
                  "Sonne", "Mond", "Wetter", "%d %% hell", "Mondtag %d", "Vollmond", "Neumond",
                  "%c%d Min zu gestern", "Vorhersage für die nächsten 7 Tage", "7 Tage",
                  "Wird bei WLAN geladen", "heute",
-                 "Temp. · Regen % · Nacht",
+                 "Temp. · Regen % · Nacht", "Temp. · Regen mm · Nacht",
                  "Ort", "Auto (per IP)", "Manuell", "Per IP", "noch nicht ermittelt", "Netz \"%s\" · %s",
                  "Diesen Ort nehmen", "Ort suchen", "Suche \"%s\"...", "Ort wählen:", "Nicht gefunden: \"%s\"",
                  "Suche fehlgeschlagen: kein Netz?", "SD-Log: an", "SD-Log: aus", "%s"};
@@ -234,8 +235,10 @@ void fmtUpdatedLine(char* out, size_t n, const Ctx& c, const WxView& v, Lang lan
   } else {
     std::snprintf(when, sizeof(when), "%02d.%02d %02d:%02d", lt.tm_mday, lt.tm_mon + 1, lt.tm_hour, lt.tm_min);
   }
-  std::snprintf(out, n, "%s %s  \xC2\xB7  Open-Meteo.com",
-                (v.stale || v.expired) ? WL.stale : WL.updated, when);
+  // Источник — обязательная подпись по лицензиям (CC BY 4.0) и Open-Meteo, и MET Norway.
+  const weather_core::Provider src = c.wx.fc.valid ? c.wx.fc.provider : c.wx.weather.provider;
+  std::snprintf(out, n, "%s %s  \xC2\xB7  %s", (v.stale || v.expired) ? WL.stale : WL.updated, when,
+                weather_core::providerName(src));
 }
 
 // Восход/закат/длина дня строкой из значков (офлайн).
@@ -332,10 +335,15 @@ void drawHourGraph(GfxRenderer& r, int x, int y, int w, int h, const weather_cor
   r.drawLine(x + 6, barsBottom, x + w - 6, barsBottom, 2, true);
   const int bw = std::max(3, step * 6 / 10);
   for (int i = 0; i < n; ++i) {
+    // Высота — вероятность осадков (Open-Meteo) или, если её нет, их количество: 4 мм за час и больше — во всю высоту
+    // (MET Norway).
+    int bh = 0;
     if (hs[i].prob > 0) {
-      const int bh = hs[i].prob * barsH / 100;
-      r.fillRect(xi(i) - bw / 2, barsBottom - bh, bw, bh, true);
+      bh = hs[i].prob * barsH / 100;
+    } else if (hs[i].prob < 0 && hs[i].mm > 0) {
+      bh = std::max(2, static_cast<int>(std::min(hs[i].mm, 4.0f) * barsH / 4));
     }
+    if (bh > 0) r.fillRect(xi(i) - bw / 2, barsBottom - bh, bw, bh, true);
   }
   // Линия температуры.
   int px = 0, py = 0;
@@ -378,10 +386,18 @@ void drawHourTable(GfxRenderer& r, int x, int y, int w, int rowH, const weather_
     const int ry = y + k * rowH;
     if (k > 0) r.drawLine(x, ry, x + w, ry, 1, true);
     if (k == 0) r.drawRoundedRect(x, ry, w, rowH, 2, 8, true);
-    char t[12], tp[16], pr[12], wd[24];
+    char t[12], tp[16], pr[20], wd[24];
     std::snprintf(t, sizeof(t), "%02d:00", localHour(hs[i].ts, offSec));
     fmtDeg(tp, sizeof(tp), hs[i].temp);
-    if (hs[i].prob >= 0) std::snprintf(pr, sizeof(pr), "%d %%", hs[i].prob); else std::snprintf(pr, sizeof(pr), "%s", kDash);
+    if (hs[i].prob >= 0) {
+      std::snprintf(pr, sizeof(pr), "%d %%", hs[i].prob);
+    } else if (!std::isnan(hs[i].mm)) {  // MET Norway: вероятности нет — количество за час
+      char mm[12];
+      fmtMm(mm, sizeof(mm), hs[i].mm, c.lang);
+      std::snprintf(pr, sizeof(pr), "%s %s", mm, WL.mmUnit);
+    } else {
+      std::snprintf(pr, sizeof(pr), "%s", kDash);
+    }
     if (std::isnan(hs[i].wind)) std::snprintf(wd, sizeof(wd), "%s", kDash);
     else std::snprintf(wd, sizeof(wd), "%ld %s", std::lround(hs[i].wind), WL.windUnit);
     r.drawText(nf, x + 8, ry + (rowH - lhT) / 2, t, true, kBold);
@@ -421,7 +437,7 @@ void drawWeatherToday(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T
     const int graphH = 170;
     drawHourGraph(r, x, y, w, graphH, hs, n, fc.utcOffsetSec);
     y += graphH + 2;
-    const Fit cap(r, kFontSmall, T.cap, w);
+    const Fit cap(r, kFontSmall, fc.provider == weather_core::Provider::MetNo ? T.capMm : T.cap, w);
     drawCentered(r, kFontSmall, x, w, y, cap.c_str());
     y += lineH(r, kFontSmall) + 6;
     const int foot = lineH(r, kFontSmall) + 6;
@@ -447,7 +463,7 @@ void drawWeatherToday(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T
     drawNoForecast(r, rx, y, rw, c, T);
     return;
   }
-  const Fit cap(r, kFontSmall, T.cap, leftW);
+  const Fit cap(r, kFontSmall, fc.provider == weather_core::Provider::MetNo ? T.capMm : T.cap, leftW);
   r.drawText(kFontSmall, lx, ly, cap.c_str(), true);
   const int graphH = 118;
   drawHourGraph(r, rx, y, rw, graphH, hs, n, fc.utcOffsetSec);
@@ -552,9 +568,15 @@ void drawWeatherWeek(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T,
     std::snprintf(p1, sizeof(p1), "%s %s", mm, WL.mmUnit);
     if (d.prob >= 0) std::snprintf(p2, sizeof(p2), "%d %%", d.prob); else std::snprintf(p2, sizeof(p2), "%s", kDash);
     const int px = x + w - colW - 4;
-    if (tight) {
+    // MET Norway вероятности осадков для России не даёт — только миллиметры, одной строкой.
+    const bool mmOnly = d.prob < 0 && fc.provider == weather_core::Provider::MetNo;
+    if (tight || mmOnly) {
       char both[56];
-      std::snprintf(both, sizeof(both), "%s  \xC2\xB7  %s", p1, p2);
+      if (mmOnly) {
+        std::snprintf(both, sizeof(both), "%s", p1);
+      } else {
+        std::snprintf(both, sizeof(both), "%s  \xC2\xB7  %s", p1, p2);
+      }
       r.drawText(kFontSmall, px - textW(r, kFontSmall, both), ry + (rowH - lhS) / 2, both, true);
     } else {
       r.drawText(kFontSmall, px - textW(r, kFontSmall, p1), ry + (rowH - 2 * lhS - 2) / 2, p1, true);

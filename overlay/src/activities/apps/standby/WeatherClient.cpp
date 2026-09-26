@@ -16,12 +16,13 @@
 #include <string>
 
 #include "CalendarConfig.h"
+#include "CalendarHttp.h"
 #include "CalendarLog.h"
 #include "CalmodWifi.h"
 #include "NetworkStartup.h"
 #include "WifiCredentialStore.h"
+#include "CrossPointSettings.h"
 #include "activities/RenderLock.h"
-#include "network/HttpDownloader.h"
 
 #if CROSSPOINT_EMULATED == 0
 #include <esp_heap_caps.h>
@@ -41,8 +42,11 @@ constexpr uint32_t kBusyTakeoverMs = calendar_config::kWifiBusyTakeoverSec * 100
 constexpr uint32_t kFailRetryMs = calendar_config::kRetryAfterFailMin * 60u * 1000u;
 constexpr uint32_t kNoCredsRetryMs = calendar_config::kRetryNoWifiMin * 60u * 1000u;
 constexpr uint32_t kLowBatteryRetryMs = calendar_config::kRetryLowBatteryMin * 60u * 1000u;
-constexpr size_t kMaxBody = 4096;         // погода, место, календарь: сотни байт … 2 КБ; больше — явно не то (не настройка)
-constexpr size_t kMaxSearchBody = 16384;  // поиск города: у мест бывают длинные списки почтовых индексов
+constexpr uint32_t kHttpStageMs = calendar_config::kHttpStageTimeoutSec * 1000u;
+// Потолки ответов (не настройки): больше — явно не то.
+constexpr size_t kMaxBody = 8192;          // место, Open-Meteo, календарь: сотни байт … 2 КБ
+constexpr size_t kMaxMetBody = 196608;     // MET Norway «complete»: ≈ 65 КБ JSON (по сети — ≈ 5 КБ gzip)
+constexpr size_t kMaxSearchBody = 16384;   // поиск города: у мест бывают длинные списки почтовых индексов
 // TLS-рукопожатие wolfSSL + разбор JSON. Upstream даёт такой работе 16 КБ («8 КБ переполняется на TLS + JSON»,
 // platformio.ini, loop task); прежних 10 КБ было впритык. Стек занят только пока идёт выход в сеть. (не настройка)
 constexpr uint32_t kTaskStackBytes = 16384;
@@ -150,6 +154,9 @@ struct WeatherClient::Job {
   weather_core::Place ipPlace;  // последнее место по IP (и через какую сеть определено)
   weather_core::Place target;   // для какого места качать погоду; в «Авто» может смениться после геолокации
   bool doWeather = false;
+  weather_core::Route route = weather_core::Route::OpenMeteoHttps;  // путь, сработавший в прошлый раз
+  uint32_t routeAt = 0;
+  int32_t utcOffsetSec = 0;     // часы устройства: MET Norway даёт время в UTC, дни считаем по местному
   unsigned nYears = 0;
   int years[kMaxYearsPerJob] = {};
   char searchQuery[64] = "";    // непусто — найти город по названию
@@ -160,6 +167,8 @@ struct WeatherClient::Job {
   weather_core::Place newPlace;
   bool wxTried = false;
   bool wxOk = false;
+  weather_core::Route wxRoute = weather_core::Route::OpenMeteoHttps;  // каким путём пришла погода (если wxOk)
+  weather_core::Route wxFirst = weather_core::Route::OpenMeteoHttps;  // какой путь пробовали первым
   weather_core::Weather nw;
   bool fcOk = false;
   weather_core::Forecast nf;
@@ -186,15 +195,80 @@ struct WeatherClient::Job {
   bool connectWifi();
   void releaseWifi();
   bool fetch(const char* url, std::string& out, size_t maxBytes, const char* what);
+  bool fetchWeather(std::string& body, char* url, size_t urlSize);
 };
 
 bool WeatherClient::Job::fetch(const char* url, std::string& out, size_t maxBytes, const char* what) {
-  const uint32_t t = millis();
-  const bool ok = HttpDownloader::fetchUrl(url, out);
-  const bool fits = !out.empty() && out.size() <= maxBytes;
-  cal_log::line("HTTP", "%s: %s, %u Б, %lu мс", what, !ok ? "ОШИБКА (подробности — строкой [HTTP] прошивки выше)" : fits ? "ok" : "пустой или слишком большой ответ",
-                static_cast<unsigned>(out.size()), static_cast<unsigned long>(millis() - t));
-  return ok && fits;
+  cal_http::Request rq;
+  rq.url = url;
+  rq.maxBytes = maxBytes;
+  rq.stageTimeoutMs = kHttpStageMs;
+  rq.abort = [this] { return abandoned(); };
+  cal_http::Result r;
+  const bool ok = cal_http::get(rq, out, r) && !out.empty();
+  char how[240];
+  cal_http::describe(r, how, sizeof(how));
+  cal_log::line("HTTP", "%s: %s", what, how);
+  if (r.stage == cal_http::Stage::Status && !out.empty()) {
+    cal_log::line("HTTP", "  ответ сервера: %.*s", static_cast<int>(std::min<size_t>(out.size(), 200)), out.data());
+  }
+  return ok;
+}
+
+// Погода — по очереди разными путями (weather_core::Route), пока какой-то не сработает. Первым — тот, что сработал в
+// прошлый раз; но запасной путь первым не дольше kWeatherPrimaryRetryHours — потом снова пробуем Open-Meteo
+// (у него есть вероятность осадков). Бюджет времени (kNetworkBudgetSec) внутри цепочки не проверяется: каждый путь и так
+// ограничен таймаутами этапов, а без погоды выход в сеть бессмыслен.
+bool WeatherClient::Job::fetchWeather(std::string& body, char* url, size_t urlSize) {
+  using weather_core::Route;
+  auto enabled = [](Route r) {
+    return r == Route::OpenMeteoHttps || (r == Route::OpenMeteoHttp && calendar_config::kWeatherHttpFallback) ||
+           (r == Route::MetNo && calendar_config::kWeatherMetNoFallback);
+  };
+  Route first = route;
+  const bool primaryDue = nowEpoch < routeAt || nowEpoch - routeAt >= calendar_config::kWeatherPrimaryRetryHours * 3600u;
+  if (!enabled(first) || (first != Route::OpenMeteoHttps && primaryDue)) first = Route::OpenMeteoHttps;
+  Route order[weather_core::kRoutes];
+  int n = 0;
+  order[n++] = first;
+  for (int i = 0; i < weather_core::kRoutes; ++i) {
+    const Route r = static_cast<Route>(i);
+    if (r != first && enabled(r)) order[n++] = r;
+  }
+  wxFirst = first;
+  for (int k = 0; k < n && !abandoned(); ++k) {
+    const Route r = order[k];
+    char what[48];
+    std::snprintf(what, sizeof(what), "погода (%s)", weather_core::routeName(r));
+    weather_core::Weather w;
+    weather_core::Forecast f;
+    bool got, parsed;
+    if (r == Route::MetNo) {
+      weather_core::buildMetNoUrl(target.lat, target.lon, url, urlSize);
+      got = fetch(url, body, kMaxMetBody, what);
+      parsed = got && weather_core::parseMetNo(body.data(), body.size(), nowEpoch, target.lat, target.lon, utcOffsetSec, w, &f);
+    } else {
+      weather_core::buildForecastUrl(target.lat, target.lon, url, urlSize, r == Route::OpenMeteoHttps);
+      got = fetch(url, body, kMaxBody, what);
+      parsed = got && weather_core::parseForecast(body.data(), body.size(), nowEpoch, w, &f);
+    }
+    if (got && !parsed) {
+      cal_log::line("WX", "%s: ответ не разобран: %.*s", what, static_cast<int>(std::min<size_t>(body.size(), 200)), body.data());
+    }
+    std::string().swap(body);  // ответ MET — десятки КБ: не держим до конца задачи
+    if (!parsed) continue;
+    w.atLat = target.lat;
+    w.atLon = target.lon;
+    nw = w;
+    nf = f;
+    fcOk = f.valid;
+    wxOk = true;
+    wxRoute = r;
+    cal_log::line("WX", "погода для %s: %.1f°, код %d; прогноз %u ч / %u дн.; источник %s", target.city, nw.temp, nw.code,
+                  static_cast<unsigned>(f.nHours), static_cast<unsigned>(f.nDays), weather_core::providerName(w.provider));
+    return true;
+  }
+  return false;
 }
 
 // Подключение к самой сильной из запомненных сетей, что сейчас видны; не вышло — следующая (до kWifiMaxAttempts).
@@ -367,14 +441,28 @@ void WeatherClient::Job::run() {
 
     // Поиск города — первым: пользователь ждёт ответа на экране.
     if (searchQuery[0]) {
-      if (weather_core::buildGeocodeUrl(searchQuery, lang, url, sizeof(url)) < 0 || !get(url, kMaxSearchBody, "поиск города")) {
-        searchResult = -1;
-      } else {
-        searchResult = weather_core::parseGeocode(body.data(), body.size(), hits, weather_core::kMaxGeoHits);
-        cal_log::line("PLACE", "поиск «%s»: %d", searchQuery, searchResult);
-        for (int i = 0; i < searchResult; ++i) {
-          cal_log::line("PLACE", "  %d. %s — %s (%.4f, %.4f)", i + 1, hits[i].name, hits[i].region, hits[i].lat, hits[i].lon);
+      // Геокодер Open-Meteo; не ответил или не нашёл — OpenStreetMap Nominatim (другая сеть, другая база); не ответил и
+      // он — Open-Meteo обычным HTTP.
+      searchResult = -1;
+      for (int k = 0; k < 3 && !abandoned(); ++k) {
+        if (searchResult > 0 || (searchResult == 0 && k == 2)) break;
+        const bool osm = k == 1;
+        const char* what = osm ? "поиск города (OpenStreetMap)" : k == 0 ? "поиск города (Open-Meteo)" : "поиск города (Open-Meteo по HTTP)";
+        const int len = osm ? weather_core::buildNominatimUrl(searchQuery, lang, url, sizeof(url))
+                            : weather_core::buildGeocodeUrl(searchQuery, lang, url, sizeof(url), k == 0);
+        if (len < 0 || !fetch(url, body, kMaxSearchBody, what)) continue;
+        const int found = osm ? weather_core::parseNominatim(body.data(), body.size(), hits, weather_core::kMaxGeoHits)
+                              : weather_core::parseGeocode(body.data(), body.size(), hits, weather_core::kMaxGeoHits);
+        if (found < 0) {
+          cal_log::line("PLACE", "%s: ответ не разобран: %.*s", what, static_cast<int>(std::min<size_t>(body.size(), 200)), body.data());
+          continue;
         }
+        searchResult = found;
+      }
+      failStreak = searchResult < 0 ? 1 : 0;
+      cal_log::line("PLACE", "поиск «%s»: %d", searchQuery, searchResult);
+      for (int i = 0; i < searchResult; ++i) {
+        cal_log::line("PLACE", "  %d. %s — %s (%.4f, %.4f)", i + 1, hits[i].name, hits[i].region, hits[i].lat, hits[i].lon);
       }
     }
 
@@ -406,21 +494,9 @@ void WeatherClient::Job::run() {
     }
 
     if (doWeather && !abandoned()) {
-      weather_core::buildForecastUrl(target.lat, target.lon, url, sizeof(url));
       wxTried = true;
-      const bool got = get(url, kMaxBody, "погода");
-      weather_core::Forecast f;
-      if (got && weather_core::parseForecast(body.data(), body.size(), nowEpoch, nw, &f)) {
-        nw.atLat = target.lat;
-        nw.atLon = target.lon;
-        wxOk = true;
-        fcOk = f.valid;
-        nf = f;
-        cal_log::line("WX", "погода для %s: %.1f°, код %d; прогноз %u ч / %u дн.", target.city, nw.temp, nw.code,
-                      static_cast<unsigned>(f.nHours), static_cast<unsigned>(f.nDays));
-      } else if (got) {
-        cal_log::line("WX", "погода: ответ не разобран: %.*s", static_cast<int>(std::min<size_t>(body.size(), 200)), body.data());
-      }
+      // Вся цепочка путей — один «запрос» для счёта неудач подряд.
+      failStreak = fetchWeather(body, url, sizeof(url)) ? 0 : failStreak + 1;
     }
 
     for (unsigned i = 0; i < nYears && !abandoned(); ++i) {
@@ -637,7 +713,11 @@ bool WeatherClient::weatherDue(uint32_t nowEpoch) const {
   const weather_core::Weather& w = cache_.weather;
   if (!w.valid || w.fetchedEpoch == 0) return true;
   if (nowEpoch < w.fetchedEpoch) return true;  // часы «ушли назад» — данным нельзя верить
-  return nowEpoch - w.fetchedEpoch >= calendar_config::kWeatherRefreshMin * 60u;
+  // MET Norway обновляет прогноз раз в час и просит не опрашивать чаще нужного.
+  const unsigned everyMin = w.provider == weather_core::Provider::MetNo
+                                ? std::max(calendar_config::kWeatherRefreshMin, calendar_config::kMetNoMinRefreshMin)
+                                : calendar_config::kWeatherRefreshMin;
+  return nowEpoch - w.fetchedEpoch >= everyMin * 60u;
 }
 
 // Есть ли что догрузить из производственного календаря: год, который смотрит пользователь, либо предзагрузка
@@ -776,6 +856,9 @@ void WeatherClient::startJob(GfxRenderer& renderer, uint32_t nowEpoch, calendar_
   j.ipPlace = ipPlace_;
   j.target = cache_.place;
   j.doWeather = forceRefresh_ || weatherDue(nowEpoch);
+  j.route = cache_.route;
+  j.routeAt = cache_.routeAt;
+  j.utcOffsetSec = (static_cast<int32_t>(SETTINGS.clockUtcOffsetQ) - 48) * 15 * 60;
   if (searchQueued_) weather_core::copyUtf8(j.searchQuery, sizeof(j.searchQuery), searchQuery_);
   if (calendar_config::kHolidaysEnabled && static_cast<int32_t>(millis() - holBackoffUntilMs_) >= 0) {
     const int cy = yearOfEpoch(nowEpoch);
@@ -837,6 +920,15 @@ void WeatherClient::applyJob(Job& j, uint32_t nowEpoch) {
       if (settings_.autoLocation) applyEffectivePlace();  // место сменилось — старая погода сброшена
     }
     if (j.wxOk) {
+      // Сработавший путь — первым в следующий раз. Отсчёт «сколько он первый» — с момента, когда он стал первым или
+      // когда основной путь снова не сработал (иначе после kWeatherPrimaryRetryHours основной пробовался бы каждый раз).
+      if (j.wxRoute != cache_.route) {
+        cal_log::line("WX", "погода теперь через %s (было: %s)", weather_core::routeName(j.wxRoute),
+                      weather_core::routeName(cache_.route));
+      }
+      if (j.wxRoute != j.wxFirst || j.wxRoute != cache_.route) cache_.routeAt = nowEpoch;
+      cache_.route = j.wxRoute;
+      cacheDirty_ = true;
       // Погода для того места, что показывается сейчас (пока шёл запрос, режим или город могли переключить).
       if (weather_core::samePlace(j.nw.atLat, j.nw.atLon, cache_.place.lat, cache_.place.lon)) {
         cache_.weather = j.nw;

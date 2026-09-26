@@ -28,33 +28,47 @@ void pump(bool forceFlush = false, bool lockHeld = false);
 // Папка журналов (для подсказки на экране).
 const char* dirPath();
 
-// Чистая часть (host-тест): что в новом снимке кольцевого буфера появилось после прошлого. tail — последняя строка
-// прошлого снимка (обновляется). lost — её уже нет в буфере: между снимками строк было больше, чем он держит.
-// Якорь — именно последняя строка: самые старые строки вытесняются первыми, а она — последней; и она уникальна — строки
-// прошивки начинаются с «[миллисекунды]».
-inline std::string newSince(const std::string& snapshot, std::string& tail, bool& lost) {
+// Чистая часть (host-тест): копирование кольцевого буфера сообщений прошивки (lib/Logging: 16 ячеек по 256 байт,
+// logHead — куда ляжет следующая строка). Читаем по ячейкам, а не текстом: строка длиннее 255 байт в ячейке обрезана
+// без перевода строки и «склеивалась» со следующей — прежний поиск по тексту из-за этого путал старое с новым.
+constexpr size_t kRingLines = 16;   // MAX_LOG_LINES
+constexpr size_t kRingEntry = 256;  // MAX_ENTRY_LEN
+
+struct RingCursor {
+  bool started = false;
+  size_t head = 0;   // logHead на момент прошлого чтения
+  std::string last;  // содержимое последней прочитанной ячейки (head-1): изменилось — кольцо обернулось
+};
+
+// Новые строки (по порядку, каждая с переводом строки) дописываются в out. lost — между чтениями строк было не меньше,
+// чем ячеек в кольце: часть могла пропасть (тогда в out — всё кольцо). Первое чтение — всё, что в кольце уже есть.
+inline void collect(const char (*ring)[kRingEntry], size_t head, RingCursor& cur, std::string& out, bool& lost) {
+  auto slot = [ring](size_t i) {
+    const char* e = ring[i % kRingLines];
+    size_t n = 0;
+    while (n < kRingEntry && e[n]) ++n;
+    return std::string(e, n);
+  };
   lost = false;
-  std::string fresh;
-  if (tail.empty()) {
-    fresh = snapshot;
-  } else {
-    const size_t k = snapshot.rfind(tail);
-    if (k == std::string::npos) {
-      lost = !snapshot.empty();
-      fresh = snapshot;
+  head %= kRingLines;
+  size_t from = head, count = kRingLines;  // всё кольцо, от самой старой ячейки
+  if (cur.started) {
+    if (slot(cur.head + kRingLines - 1) == cur.last) {
+      from = cur.head;
+      count = (head + kRingLines - cur.head) % kRingLines;
     } else {
-      fresh = snapshot.substr(k + tail.size());
+      lost = true;
     }
   }
-  if (!snapshot.empty()) {
-    size_t start = 0;  // начало последней строки (последний перевод строки не считается — он её конец)
-    if (snapshot.size() >= 2) {
-      const size_t nl = snapshot.rfind('\n', snapshot.size() - 2);
-      if (nl != std::string::npos) start = nl + 1;
-    }
-    tail = snapshot.substr(start);
+  for (size_t k = 0; k < count; ++k) {
+    const std::string s = slot(from + k);
+    if (s.empty()) continue;
+    out += s;
+    if (out.back() != '\n') out += '\n';
   }
-  return fresh;
+  cur.started = true;
+  cur.head = head;
+  cur.last = slot(head + kRingLines - 1);
 }
 
 }  // namespace cal_log

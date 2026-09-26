@@ -4,9 +4,12 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+
+#include "SunTimes.h"
 
 namespace weather_core {
 
@@ -44,10 +47,14 @@ const Entry kTable[] = {
     {71, Icon::Snow, "Light snow", "Небольшой снег", "Leichter Schnee"},
     {73, Icon::Snow, "Snow", "Снег", "Schneefall"},
     {75, Icon::Snow, "Heavy snow", "Сильный снег", "Starker Schnee"},
+    {68, Icon::Snow, "Sleet", "Мокрый снег", "Schneeregen"},  // 68/69, 83/84 — только от MET Norway
+    {69, Icon::Snow, "Heavy sleet", "Сильный мокрый снег", "Starker Schneeregen"},
     {77, Icon::Snow, "Snow grains", "Снежная крупа", "Schneegriesel"},
     {80, Icon::Rain, "Showers", "Ливень", "Schauer"},
     {81, Icon::Rain, "Showers", "Ливень", "Schauer"},
     {82, Icon::Rain, "Heavy showers", "Сильный ливень", "Starke Schauer"},
+    {83, Icon::Snow, "Sleet showers", "Мокрый снег", "Schneeregenschauer"},
+    {84, Icon::Snow, "Sleet showers", "Сильный мокрый снег", "Schneeregenschauer"},
     {85, Icon::Snow, "Snow showers", "Снегопад", "Schneeschauer"},
     {86, Icon::Snow, "Snow showers", "Сильный снегопад", "Schneeschauer"},
     {95, Icon::Thunder, "Thunderstorm", "Гроза", "Gewitter"},
@@ -86,6 +93,20 @@ const char* description(Lang lang, int code) {
 
 const Labels& labels(Lang lang) { return lang == Lang::Ru ? kLabelsRu : lang == Lang::De ? kLabelsDe : kLabelsEn; }
 
+const char* providerName(Provider p) { return p == Provider::MetNo ? "MET Norway" : "Open-Meteo.com"; }
+
+const char* routeName(Route r) {
+  switch (r) {
+    case Route::OpenMeteoHttps:
+      return "Open-Meteo";
+    case Route::OpenMeteoHttp:
+      return "Open-Meteo по HTTP";
+    case Route::MetNo:
+      return "MET Norway";
+  }
+  return "?";
+}
+
 // ---- URL --------------------------------------------------------------------
 
 namespace {
@@ -99,11 +120,11 @@ int buildGeoUrl(Lang lang, char* buf, size_t size) {
                        langCode(lang));
 }
 
-int buildGeocodeUrl(const char* query, Lang lang, char* buf, size_t size) {
+namespace {
+
+// query в UTF-8 → %XX (кроме букв/цифр ASCII и «-_.~») в buf начиная с o. Новая длина или -1, если не влезло.
+int appendEncoded(const char* query, char* buf, size_t size, size_t o) {
   static constexpr char kHex[] = "0123456789ABCDEF";
-  const int head = std::snprintf(buf, size, "https://geocoding-api.open-meteo.com/v1/search?name=");
-  if (head < 0 || static_cast<size_t>(head) >= size) return -1;
-  size_t o = static_cast<size_t>(head);
   for (const unsigned char* p = reinterpret_cast<const unsigned char*>(query); *p; ++p) {
     const bool plain = *p < 0x80 && std::isalnum(*p);
     const bool unreserved = plain || *p == '-' || *p == '_' || *p == '.' || *p == '~';
@@ -116,21 +137,55 @@ int buildGeocodeUrl(const char* query, Lang lang, char* buf, size_t size) {
       buf[o++] = kHex[*p & 0x0F];
     }
   }
-  const int tail = std::snprintf(buf + o, size - o, "&count=%d&language=%s&format=json", kMaxGeoHits, langCode(lang));
-  if (tail < 0 || o + static_cast<size_t>(tail) >= size) return -1;
-  return static_cast<int>(o + static_cast<size_t>(tail));
+  buf[o] = '\0';
+  return static_cast<int>(o);
 }
 
-int buildForecastUrl(double lat, double lon, char* buf, size_t size) {
+int searchUrl(const char* head, const char* query, const char* tailFmt, Lang lang, char* buf, size_t size) {
+  const int h = std::snprintf(buf, size, "%s", head);
+  if (h < 0 || static_cast<size_t>(h) >= size) return -1;
+  const int o = appendEncoded(query, buf, size, static_cast<size_t>(h));
+  if (o < 0) return -1;
+  const int tail = std::snprintf(buf + o, size - static_cast<size_t>(o), tailFmt, kMaxGeoHits, langCode(lang));
+  if (tail < 0 || static_cast<size_t>(o) + static_cast<size_t>(tail) >= size) return -1;
+  return o + tail;
+}
+
+}  // namespace
+
+int buildGeocodeUrl(const char* query, Lang lang, char* buf, size_t size, bool https) {
+  return searchUrl(https ? "https://geocoding-api.open-meteo.com/v1/search?name="
+                         : "http://geocoding-api.open-meteo.com/v1/search?name=",
+                   query, "&count=%d&language=%s&format=json", lang, buf, size);
+}
+
+int buildNominatimUrl(const char* query, Lang lang, char* buf, size_t size) {
+  // featureType=settlement — только города, посёлки, деревни (без областей и улиц).
+  return searchUrl("https://nominatim.openstreetmap.org/search?q=", query,
+                   "&format=jsonv2&limit=%d&featureType=settlement&accept-language=%s", lang, buf, size);
+}
+
+int buildForecastUrl(double lat, double lon, char* buf, size_t size, bool https) {
+  char where[128];
+  if (https) {
+    std::snprintf(where, sizeof(where), "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f", lat, lon);
+  } else {
+    std::snprintf(where, sizeof(where), "http://api.open-meteo.com/v1/forecast?latitude=%.2f&longitude=%.2f", lat, lon);
+  }
   return std::snprintf(buf, size,
-                       "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
+                       "%s"
                        "&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,is_day"
                        "&hourly=temperature_2m,weather_code,precipitation_probability,wind_speed_10m,is_day"
                        "&forecast_hours=24"
                        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,"
                        "precipitation_probability_max,wind_speed_10m_max&forecast_days=7"
                        "&timezone=auto&timeformat=unixtime&wind_speed_unit=ms",
-                       lat, lon);
+                       where);
+}
+
+int buildMetNoUrl(double lat, double lon, char* buf, size_t size) {
+  // Не больше 4 знаков после запятой — так просит MET (иначе их кэш не работает и запрос могут отклонить).
+  return std::snprintf(buf, size, "https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=%.4f&lon=%.4f", lat, lon);
 }
 
 // ---- Разбор ------------------------------------------------------------------
@@ -340,6 +395,268 @@ bool parseForecast(const char* json, size_t len, uint32_t nowEpoch, Weather& out
   return true;
 }
 
+// ---- MET Norway ----------------------------------------------------------------
+
+int metSymbolToWmo(const char* symbol) {
+  if (!symbol || !symbol[0]) return -1;
+  std::string s(symbol);
+  const size_t us = s.find('_');  // «_day», «_night», «_polartwilight» — день/ночь считаем сами
+  if (us != std::string::npos) s.resize(us);
+  auto has = [&s](const char* w) { return s.find(w) != std::string::npos; };
+  if (s == "clearsky") return 0;
+  if (s == "fair") return 1;
+  if (s == "partlycloudy") return 2;
+  if (s == "cloudy") return 3;
+  if (s == "fog") return 45;
+  if (has("thunder")) return 95;
+  // «light…» (у MET встречается и «lights…» — опечатка в их API), обычный, «heavy…».
+  const int level = s.compare(0, 5, "light") == 0 ? 0 : s.compare(0, 5, "heavy") == 0 ? 2 : 1;
+  const bool showers = has("showers");
+  if (has("sleet")) return showers ? (level == 0 ? 83 : 84) : (level == 0 ? 68 : 69);
+  if (has("snow")) return showers ? (level == 2 ? 86 : 85) : (level == 0 ? 71 : level == 1 ? 73 : 75);
+  if (has("rain")) return showers ? 80 + level : 61 + 2 * level;
+  return -1;
+}
+
+namespace {
+
+// «2026-09-26T13:00:00Z» → Unix; 0 — не разобрать.
+uint32_t isoUtcToEpoch(const char* s) {
+  int y = 0;
+  unsigned mo = 0, d = 0, hh = 0, mm = 0, ss = 0;
+  if (!s || std::sscanf(s, "%d-%u-%uT%u:%u:%u", &y, &mo, &d, &hh, &mm, &ss) != 6) return 0;
+  if (y < 1970 || mo < 1 || mo > 12 || d < 1 || d > 31 || hh > 23 || mm > 59 || ss > 60) return 0;
+  return static_cast<uint32_t>(calendar_core::daysFromCivil(y, mo, d)) * 86400u + hh * 3600u + mm * 60u + ss;
+}
+
+int32_t localDay(uint32_t epoch, int32_t off) {
+  const int64_t t = static_cast<int64_t>(epoch) + off;
+  return static_cast<int32_t>(t >= 0 ? t / 86400 : (t - 86399) / 86400);
+}
+
+// День или ночь в момент t — по восходу и закату места (у MET признака «день» нет, а значки без суффикса бывают).
+class DayNight {
+ public:
+  DayNight(double lat, double lon, int32_t off) : lat_(lat), lon_(lon), off_(off) {}
+  bool isDay(uint32_t t) {
+    const int32_t day = localDay(t, off_);
+    if (day != day_) {
+      int y;
+      unsigned m, d;
+      calendar_core::civilFromDays(day, y, m, d);
+      sun_ = sun_times::compute(y, m, d, lat_, lon_, off_ / 60);
+      day_ = day;
+    }
+    if (!sun_.valid || sun_.polarDay) return true;
+    if (sun_.polarNight) return false;
+    const int minute = static_cast<int>((static_cast<int64_t>(t) + off_ - static_cast<int64_t>(day) * 86400) / 60);
+    if (sun_.sunriseMin <= sun_.sunsetMin) return minute >= sun_.sunriseMin && minute < sun_.sunsetMin;
+    return minute >= sun_.sunriseMin || minute < sun_.sunsetMin;  // закат «после полуночи» по местным часам
+  }
+
+ private:
+  double lat_, lon_;
+  int32_t off_;
+  int32_t day_ = INT32_MIN;
+  sun_times::Result sun_{};
+};
+
+// «Ощущается» по Стедману (так же считает Open-Meteo), если сервис его не дал: температура, влажность, ветер.
+float apparent(float t, float rh, float wind) {
+  if (std::isnan(t) || std::isnan(rh) || std::isnan(wind)) return NAN;
+  const float e = rh / 100.0f * 6.105f * std::exp(17.27f * t / (237.7f + t));
+  return t + 0.33f * e - 0.70f * wind - 4.00f;
+}
+
+void minTo(float& a, float v) {
+  if (!std::isnan(v) && (std::isnan(a) || v < a)) a = v;
+}
+void maxTo(float& a, float v) {
+  if (!std::isnan(v) && (std::isnan(a) || v > a)) a = v;
+}
+void addTo(float& a, float v) {
+  if (!std::isnan(v)) a = std::isnan(a) ? v : a + v;
+}
+
+}  // namespace
+
+bool parseMetNo(const char* json, size_t len, uint32_t nowEpoch, double lat, double lon, int32_t off, Weather& out,
+                Forecast* detail) {
+  // Фильтр: из ≈ 65 КБ ответа в документ идут только нужные поля (давление, облачность и т.п. — мимо).
+  JsonDocument filter;
+  JsonObject fe = filter["properties"]["timeseries"].add<JsonObject>();
+  fe["time"] = true;
+  JsonObject fi = fe["data"]["instant"]["details"].to<JsonObject>();
+  for (const char* k : {"air_temperature", "apparent_air_temperature", "wind_speed", "relative_humidity"}) fi[k] = true;
+  for (const char* period : {"next_1_hours", "next_6_hours"}) {
+    fe["data"][period]["summary"]["symbol_code"] = true;
+    JsonObject fd = fe["data"][period]["details"].to<JsonObject>();
+    for (const char* k : {"precipitation_amount", "probability_of_precipitation", "air_temperature_max", "air_temperature_min"}) {
+      fd[k] = true;
+    }
+  }
+  JsonDocument doc;
+  if (deserializeJson(doc, json, len, DeserializationOption::Filter(filter))) return false;
+  JsonArrayConst series = doc["properties"]["timeseries"].as<JsonArrayConst>();
+  if (series.size() == 0) return false;
+
+  DayNight dn(lat, lon, off);
+  const int32_t today = localDay(nowEpoch, off);
+  const uint32_t hourStart = nowEpoch - nowEpoch % 3600u;
+  struct DayAgg {
+    float tMin = NAN, tMax = NAN, mm = NAN, wind = NAN;
+    int code = -1, prob = -1;
+    bool any = false;
+  } days[kFcDays];
+  Forecast f;
+  f.utcOffsetSec = off;
+  f.fetchedEpoch = nowEpoch;
+  f.provider = Provider::MetNo;
+
+  // «Сейчас» — последний шаг ряда, начавшийся не позже текущего момента (первый шаг — текущий час).
+  JsonVariantConst cur;
+  for (JsonVariantConst e : series) {
+    const uint32_t t = isoUtcToEpoch(e["time"] | "");
+    if (t == 0) continue;
+    if (t <= nowEpoch || cur.isNull()) cur = e;
+
+    JsonVariantConst inst = e["data"]["instant"]["details"];
+    JsonVariantConst n1 = e["data"]["next_1_hours"];
+    JsonVariantConst n6 = e["data"]["next_6_hours"];
+    const float temp = numberOrNan(inst["air_temperature"]);
+    const float wind = numberOrNan(inst["wind_speed"]);
+
+    // Часы: только часовые шаги, начиная с текущего часа.
+    if (!n1.isNull() && t >= hourStart && f.nHours < kFcHours) {
+      FcHour& h = f.h[f.nHours++];
+      h.ts = t;
+      h.temp = temp;
+      h.wind = wind;
+      h.code = static_cast<int16_t>(metSymbolToWmo(n1["summary"]["symbol_code"] | ""));
+      h.prob = n1["details"]["probability_of_precipitation"].is<float>()
+                   ? static_cast<int8_t>(std::lround(n1["details"]["probability_of_precipitation"].as<float>()))
+                   : -1;
+      h.mm = numberOrNan(n1["details"]["precipitation_amount"]);
+      h.isDay = dn.isDay(t);
+    }
+
+    // Дни: осадки и «самая суровая» погода — по часовым шагам, где они есть, иначе по шестичасовым (они не
+    // перекрываются: часовые идут до начала первого шестичасового). Температура — мгновенная в каждом шаге плюс
+    // мин/макс шестичасовых отрезков.
+    const int32_t di = localDay(t, off) - today;
+    if (di < 0 || di >= kFcDays) continue;
+    DayAgg& a = days[di];
+    a.any = true;
+    minTo(a.tMin, temp);
+    maxTo(a.tMax, temp);
+    maxTo(a.wind, wind);
+    JsonVariantConst per = !n1.isNull() ? n1 : n6;
+    if (per.isNull()) continue;
+    addTo(a.mm, numberOrNan(per["details"]["precipitation_amount"]));
+    a.code = std::max(a.code, metSymbolToWmo(per["summary"]["symbol_code"] | ""));
+    if (per["details"]["probability_of_precipitation"].is<float>()) {
+      a.prob = std::max(a.prob, static_cast<int>(std::lround(per["details"]["probability_of_precipitation"].as<float>())));
+    }
+    if (n1.isNull()) {
+      minTo(a.tMin, numberOrNan(n6["details"]["air_temperature_min"]));
+      maxTo(a.tMax, numberOrNan(n6["details"]["air_temperature_max"]));
+    }
+  }
+  if (cur.isNull()) return false;
+
+  JsonVariantConst ci = cur["data"]["instant"]["details"];
+  Weather w;
+  w.temp = numberOrNan(ci["air_temperature"]);
+  if (std::isnan(w.temp)) return false;
+  w.windMs = numberOrNan(ci["wind_speed"]);
+  w.feels = numberOrNan(ci["apparent_air_temperature"]);
+  if (std::isnan(w.feels)) w.feels = apparent(w.temp, numberOrNan(ci["relative_humidity"]), w.windMs);
+  const char* sym = cur["data"]["next_1_hours"]["summary"]["symbol_code"] | "";
+  if (!sym[0]) sym = cur["data"]["next_6_hours"]["summary"]["symbol_code"] | "";
+  w.code = static_cast<int16_t>(metSymbolToWmo(sym));
+  w.isDay = dn.isDay(nowEpoch);
+  if (days[0].any) {
+    w.tMin = days[0].tMin;
+    w.tMax = days[0].tMax;
+    w.precipMm = days[0].mm;
+    w.precipProb = static_cast<int16_t>(days[0].prob);
+  }
+  w.valid = true;
+  w.fetchedEpoch = nowEpoch;
+  w.provider = Provider::MetNo;
+
+  for (int i = 0; i < kFcDays; ++i) {
+    if (!days[i].any) break;
+    FcDay& d = f.d[f.nDays++];
+    d.ts = static_cast<uint32_t>(static_cast<int64_t>(today + i) * 86400 - off);
+    d.tMin = days[i].tMin;
+    d.tMax = days[i].tMax;
+    d.precipMm = days[i].mm;
+    d.windMax = days[i].wind;
+    d.code = static_cast<int16_t>(days[i].code);
+    d.prob = static_cast<int8_t>(days[i].prob);
+  }
+  f.valid = f.nHours > 0 || f.nDays > 0;
+  out = w;
+  if (detail && f.valid) *detail = f;
+  return true;
+}
+
+int parseNominatim(const char* json, size_t len, GeoHit* out, int maxOut) {
+  JsonDocument filter;
+  JsonObject f = filter.add<JsonObject>();
+  f["name"] = true;
+  f["lat"] = true;
+  f["lon"] = true;
+  f["display_name"] = true;
+  f["addresstype"] = true;
+  JsonDocument doc;
+  if (deserializeJson(doc, json, len, DeserializationOption::Filter(filter))) return -1;
+  if (!doc.is<JsonArray>()) return -1;
+  int n = 0;
+  bool town[kMaxGeoHits] = {};  // запись — сам населённый пункт (а не, например, одноимённый регион)
+  for (JsonVariantConst r : doc.as<JsonArrayConst>()) {
+    // Координаты у Nominatim — строками.
+    const char* la = r["lat"] | "";
+    const char* lo = r["lon"] | "";
+    char* e1 = nullptr;
+    char* e2 = nullptr;
+    const double lat = std::strtod(la, &e1), lon = std::strtod(lo, &e2);
+    const char* name = r["name"] | "";
+    if (e1 == la || e2 == lo || !validCoord(lat, lon) || !name[0]) continue;
+    // «Москва, Центральный федеральный округ, Россия» → регион — всё после названия.
+    const char* dn = r["display_name"] | "";
+    const size_t nl = std::strlen(name);
+    const char* region = (std::strncmp(dn, name, nl) == 0 && dn[nl] == ',') ? dn + nl + 1 : dn;
+    while (*region == ' ') ++region;
+    const char* type = r["addresstype"] | "";
+    const bool isTown = !std::strcmp(type, "city") || !std::strcmp(type, "town") || !std::strcmp(type, "village") ||
+                        !std::strcmp(type, "hamlet");
+    GeoHit h;
+    copyUtf8(h.name, sizeof(h.name), name);
+    copyUtf8(h.region, sizeof(h.region), region);
+    h.lat = lat;
+    h.lon = lon;
+    // Одинаковые строки в списке (город-регион «Москва» и город «Москва») — одна, с координатами самого города.
+    int same = -1;
+    for (int i = 0; i < n && i < maxOut; ++i) {
+      if (!std::strcmp(out[i].name, h.name) && !std::strcmp(out[i].region, h.region)) same = i;
+    }
+    if (same >= 0) {
+      if (isTown && !town[same]) {
+        out[same] = h;
+        town[same] = true;
+      }
+      continue;
+    }
+    if (n >= maxOut || n >= kMaxGeoHits) continue;
+    out[n] = h;
+    town[n] = isTown;
+    ++n;
+  }
+  return n;
+}
+
 // ---- Кэш ---------------------------------------------------------------------
 
 std::string serializeCache(const Cache& c) {
@@ -353,6 +670,10 @@ std::string serializeCache(const Cache& c) {
   p["ipAt"] = c.place.ipEpoch;
   p["ipLang"] = c.place.ipLang;
   if (c.place.ssid[0]) p["ssid"] = c.place.ssid;
+  if (c.route != Route::OpenMeteoHttps) {
+    doc["route"] = static_cast<int>(c.route);
+    doc["routeAt"] = c.routeAt;
+  }
   if (c.weather.valid) {
     JsonObject w = doc["wx"].to<JsonObject>();
     auto put = [&w](const char* k, float v) {
@@ -368,6 +689,7 @@ std::string serializeCache(const Cache& c) {
     if (c.weather.code >= 0) w["c"] = c.weather.code;
     w["d"] = c.weather.isDay ? 1 : 0;
     w["at"] = c.weather.fetchedEpoch;
+    if (c.weather.provider != Provider::OpenMeteo) w["src"] = static_cast<int>(c.weather.provider);
     if (!std::isnan(c.weather.atLat) && !std::isnan(c.weather.atLon)) {
       w["la"] = c.weather.atLat;
       w["lo"] = c.weather.atLon;
@@ -377,9 +699,14 @@ std::string serializeCache(const Cache& c) {
     JsonObject f = doc["fc"].to<JsonObject>();
     f["off"] = c.fc.utcOffsetSec;
     f["at"] = c.fc.fetchedEpoch;
+    if (c.fc.provider != Provider::OpenMeteo) f["src"] = static_cast<int>(c.fc.provider);
     JsonObject h = f["h"].to<JsonObject>();
     JsonArray hts = h["ts"].to<JsonArray>(), ht = h["t"].to<JsonArray>(), hc = h["c"].to<JsonArray>(),
               hp = h["p"].to<JsonArray>(), hw = h["w"].to<JsonArray>(), hd = h["d"].to<JsonArray>();
+    bool anyMm = false;
+    for (int i = 0; i < c.fc.nHours; ++i) anyMm = anyMm || !std::isnan(c.fc.h[i].mm);
+    JsonArray hm;
+    if (anyMm) hm = h["m"].to<JsonArray>();
     for (int i = 0; i < c.fc.nHours; ++i) {
       const FcHour& x = c.fc.h[i];
       hts.add(x.ts);
@@ -388,6 +715,9 @@ std::string serializeCache(const Cache& c) {
       hp.add(x.prob);
       if (std::isnan(x.wind)) hw.add(nullptr); else hw.add(x.wind);
       hd.add(x.isDay ? 1 : 0);
+      if (anyMm) {
+        if (std::isnan(x.mm)) hm.add(nullptr); else hm.add(x.mm);
+      }
     }
     JsonObject d = f["d"].to<JsonObject>();
     JsonArray dts = d["ts"].to<JsonArray>(), dmx = d["max"].to<JsonArray>(), dmn = d["min"].to<JsonArray>(),
@@ -426,6 +756,11 @@ bool parseCache(const char* json, size_t len, Cache& out) {
   c.place.ipEpoch = p["ipAt"] | 0u;
   c.place.ipLang = static_cast<uint8_t>(p["ipLang"] | 0);
   copyUtf8(c.place.ssid, sizeof(c.place.ssid), p["ssid"] | "");
+  const int route = doc["route"] | 0;
+  if (route > 0 && route < kRoutes) {
+    c.route = static_cast<Route>(route);
+    c.routeAt = doc["routeAt"] | 0u;
+  }
 
   JsonVariantConst w = doc["wx"];
   if (!w.isNull()) {
@@ -440,6 +775,7 @@ bool parseCache(const char* json, size_t len, Cache& out) {
       c.weather.code = w["c"].is<int>() ? static_cast<int16_t>(w["c"].as<int>()) : -1;
       c.weather.isDay = (w["d"] | 1) != 0;
       c.weather.fetchedEpoch = w["at"] | 0u;
+      c.weather.provider = (w["src"] | 0) == 1 ? Provider::MetNo : Provider::OpenMeteo;
       // Кэш до появления «la/lo» писал погоду только для того места, что лежит рядом, — к нему и относим.
       c.weather.atLat = w["la"].is<double>() ? w["la"].as<double>() : lat;
       c.weather.atLon = w["lo"].is<double>() ? w["lo"].as<double>() : lon;
@@ -458,6 +794,7 @@ bool parseCache(const char* json, size_t len, Cache& out) {
       x.prob = f["h"]["p"][i].is<int>() ? static_cast<int8_t>(f["h"]["p"][i].as<int>()) : -1;
       x.wind = numberOrNan(f["h"]["w"][i]);
       x.isDay = (f["h"]["d"][i] | 1) != 0;
+      x.mm = numberOrNan(f["h"]["m"][i]);
     }
     JsonArrayConst dts = f["d"]["ts"].as<JsonArrayConst>();
     const size_t nd = std::min<size_t>(dts.size(), kFcDays);
@@ -475,6 +812,7 @@ bool parseCache(const char* json, size_t len, Cache& out) {
     c.fc.nDays = static_cast<uint8_t>(nd);
     c.fc.utcOffsetSec = f["off"] | 0;
     c.fc.fetchedEpoch = f["at"] | 0u;
+    c.fc.provider = (f["src"] | 0) == 1 ? Provider::MetNo : Provider::OpenMeteo;
     c.fc.valid = (nh > 0 && c.fc.h[0].ts != 0) || (nd > 0 && c.fc.d[0].ts != 0);
   }
   out = c;

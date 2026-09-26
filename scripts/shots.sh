@@ -10,6 +10,7 @@
 #   docs        кадры для README: Москва (мок геолокации и прогноза) + живой календарь праздников
 #   docs_place  кадр экрана «Место» для README (подложенные данные, поиск города — мок)
 #   hang        сеть «зависла» (прокси в никуда): экран и тапы должны работать, пока сетевая задача ждёт
+#   fallback    Open-Meteo недоступен ни по HTTPS, ни по HTTP → погода от MET Norway (мок: настоящий gzip-ответ на 26.09.2026)
 #   holidays_offline нет сети и календаря: май 2026 и 2027 — только выходные и фиксированные праздники
 #   detail_land то же в ландшафте (погода ×2, день, год)
 #   detail      тапы: погода (сегодня, 7 дней), день, май с праздниками, 9 мая, год (нужен интернет, эмулируется Paper Mono с тачем)
@@ -28,7 +29,7 @@ cd "$WORK"
 
 run() {  # run "<input script>" "<screenshots>"   (окружение — из вызывающего)
   CROSSPOINT_SIM_INPUT_SCRIPT="$1" CROSSPOINT_SIM_SCREENSHOTS="$2" timeout 120 "$BIN" 2>&1 \
-    | grep -E "SIM\] Saved|\[WX\]|panic|Assert|abort|Guru" || true
+    | grep -E "SIM\] Saved|\[WX\]|\[HTTP\]|panic|Assert|abort|Guru" || true
 }
 standby() {  # standby <конец_мс> <скрины>
   run "1500:BACK;$1:QUIT" "$2"
@@ -74,6 +75,13 @@ for s in "${SCENARIOS[@]}"; do
       wifi_saved; cache_clear; mkdir -p "$OUT/mock"; cp "$ROOT/tests/data/openmeteo_moscow_7d.json" "$OUT/mock/forecast"
       CROSSPOINT_SIM_HTTP_MOCK_ROOT="$OUT/mock" https_proxy=$DEAD_PROXY HTTPS_PROXY=$DEAD_PROXY \
         standby 13000 "12000:$OUT/wx_moscow.bmp" ;;
+    fallback)
+      wifi_saved; cache_clear; mkdir -p "$OUT/mock_fb"; rm -f "$OUT/mock_fb"/*
+      cp "$ROOT/tests/data/metno_moscow_complete.json.gz" "$OUT/mock_fb/complete"
+      CROSSPOINT_SIM_HTTP_MOCK_ROOT="$OUT/mock_fb" https_proxy=$DEAD_PROXY HTTPS_PROXY=$DEAD_PROXY \
+        http_proxy=$DEAD_PROXY HTTP_PROXY=$DEAD_PROXY \
+        run "1500:BACK;16000:TAP:240,330;19000:SWIPE:400,400,100,400;22000:QUIT" \
+          "15000:$OUT/wx_metno_main.bmp;18500:$OUT/wx_metno_weather.bmp;21500:$OUT/wx_metno_7d.bmp" ;;
     live)
       wifi_saved; cache_clear
       standby 20000 "19000:$OUT/wx_live.bmp" ;;

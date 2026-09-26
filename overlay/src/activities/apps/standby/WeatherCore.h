@@ -8,7 +8,7 @@
 #include "CalendarConfig.h"
 #include "CalendarCore.h"
 
-// Чистая часть погоды: типы, разбор ответов ipwhois.app и Open-Meteo, таблица кодов WMO,
+// Чистая часть погоды: типы, разбор ответов ipwhois.app, Open-Meteo, MET Norway и Nominatim, таблица кодов WMO,
 // (де)сериализация кэша. Без Arduino/SDK; ArduinoJson — header-only, тестируется на хосте.
 namespace weather_core {
 
@@ -36,6 +36,17 @@ struct Place {
 // Координаты рядом (≈ 5 км) — одно и то же место для погоды.
 bool samePlace(double lat1, double lon1, double lat2, double lon2);
 
+// Откуда данные о погоде: на экране «Погода» подписан источник (требование лицензий CC BY 4.0 обоих).
+enum class Provider : uint8_t { OpenMeteo = 0, MetNo = 1 };
+const char* providerName(Provider p);  // «Open-Meteo.com» / «MET Norway»
+
+// Пути к погоде — в этом порядке, пока какой-то не сработает (§13.9 концепции): Open-Meteo по HTTPS; он же обычным
+// HTTP (если мешают именно шифрованному соединению); MET Norway (другой сервер в другой сети). Сработавший путь
+// запоминается и пробуется первым в следующий раз.
+enum class Route : uint8_t { OpenMeteoHttps = 0, OpenMeteoHttp = 1, MetNo = 2 };
+constexpr int kRoutes = 3;
+const char* routeName(Route r);
+
 // Поле, которого нет, — NaN: интерфейс рисует заглушку именно для него, а не для всего блока.
 struct Weather {
   bool valid = false;         // есть хотя бы температура
@@ -52,6 +63,7 @@ struct Weather {
   // Для каких координат получена: место сменилось (ручное ⇄ по IP, другой город) — эти данные не показываем.
   double atLat = NAN;
   double atLon = NAN;
+  Provider provider = Provider::OpenMeteo;
 };
 
 // Прогноз для подробных экранов: ближайшие 24 часа и 7 дней (сегодня + 6). Отсутствующие поля — NaN / -1.
@@ -64,6 +76,7 @@ struct FcHour {
   float wind = NAN;  // м/с
   int16_t code = -1;
   int8_t prob = -1;  // вероятность осадков, %
+  float mm = NAN;    // осадки за этот час, мм (есть у MET Norway; у Open-Meteo вместо них — вероятность)
   bool isDay = true;
 };
 
@@ -83,6 +96,7 @@ struct Forecast {
   uint8_t nDays = 0;
   int32_t utcOffsetSec = 0;  // смещение места (для локальных дат и часов)
   uint32_t fetchedEpoch = 0;
+  Provider provider = Provider::OpenMeteo;
   FcHour h[kFcHours];
   FcDay d[kFcDays];
 };
@@ -91,6 +105,8 @@ struct Cache {
   Place place;
   Weather weather;
   Forecast fc;
+  Route route = Route::OpenMeteoHttps;  // каким путём погода пришла в последний раз — его пробуем первым
+  uint32_t routeAt = 0;                 // с какого момента этот путь первый (через kWeatherPrimaryRetryHours — снова Open-Meteo)
 };
 
 enum class Icon : uint8_t {
@@ -117,7 +133,11 @@ constexpr uint32_t kStaleSec = calendar_config::kStaleHours * 3600u;
 constexpr uint32_t kExpireSec = calendar_config::kExpireHours * 3600u;
 
 int buildGeoUrl(calendar_core::Lang lang, char* buf, size_t size);
-int buildForecastUrl(double lat, double lon, char* buf, size_t size);
+// https=false — обычный HTTP; координаты тогда округляются до 0,01° (≈ 1 км: точнее для погоды не нужно, а запрос
+// идёт открытым текстом).
+int buildForecastUrl(double lat, double lon, char* buf, size_t size, bool https = true);
+// MET Norway Locationforecast 2.0 «complete» (без ключа; нужен User-Agent с контактом — kHttpUserAgent).
+int buildMetNoUrl(double lat, double lon, char* buf, size_t size);
 
 // ipwhois.app: {"success":true,"city":"..","latitude":..,"longitude":..}. out меняется только при true.
 bool parseGeo(const char* json, size_t len, calendar_core::Lang lang, uint32_t nowEpoch, Place& out);
@@ -125,6 +145,12 @@ bool parseGeo(const char* json, size_t len, calendar_core::Lang lang, uint32_t n
 // Если задан detail — из того же разбора заполняется и прогноз 24 ч + 7 дней (он не обязателен: при его отсутствии
 // в ответе detail не меняется, а функция всё равно возвращает true).
 bool parseForecast(const char* json, size_t len, uint32_t nowEpoch, Weather& out, Forecast* detail = nullptr);
+// MET Norway: то же самое, но из их ряда прогнозов (UTC, шаг 1 ч на ≈ 2,5 суток, дальше 6 ч). Часовой пояс места
+// сервис не сообщает — берём utcOffsetSec (часы устройства); день/ночь — по восходу/закату (SunTimes) для lat/lon.
+bool parseMetNo(const char* json, size_t len, uint32_t nowEpoch, double lat, double lon, int32_t utcOffsetSec,
+                Weather& out, Forecast* detail = nullptr);
+// Значок MET Norway («lightrainshowers_day», «heavysnowandthunder» …) → код WMO; -1 — не знаем.
+int metSymbolToWmo(const char* symbol);
 
 std::string serializeCache(const Cache& c);
 bool parseCache(const char* json, size_t len, Cache& out);  // при false out не меняется
@@ -147,9 +173,12 @@ struct GeoHit {
 };
 constexpr int kMaxGeoHits = 5;
 // Длина URL или -1, если не влезло. Запрос кодируется (UTF-8 → %XX), язык названий — как у интерфейса.
-int buildGeocodeUrl(const char* query, calendar_core::Lang lang, char* buf, size_t size);
+int buildGeocodeUrl(const char* query, calendar_core::Lang lang, char* buf, size_t size, bool https = true);
 // Число найденных мест (0 — ничего не найдено) или -1 — ответ не разобрать.
 int parseGeocode(const char* json, size_t len, GeoHit* out, int maxOut);
+// Запасной поиск — OpenStreetMap Nominatim (без ключа, ODbL; нужен User-Agent с контактом): только населённые пункты.
+int buildNominatimUrl(const char* query, calendar_core::Lang lang, char* buf, size_t size);
+int parseNominatim(const char* json, size_t len, GeoHit* out, int maxOut);
 // Координаты текстом: «55.75, 37.62», «55,75 37,62», «55.75;37.62». false — это не координаты (или вне диапазона).
 bool parseCoords(const char* text, double& lat, double& lon);
 

@@ -16,9 +16,10 @@
 #include "activities/RenderLock.h"
 #include "util/TimeUtils.h"
 
-// lib/Logging/Logging.cpp: головка RTC-кольца последних сообщений LOG_*. Только читаем — как дешёвый признак
-// «появилось новое»; сами строки берём публичным getLastLogs().
+// lib/Logging/Logging.cpp: RTC-кольцо последних сообщений LOG_* (16 ячеек по 256 байт) и его головка. Только читаем.
+extern char logMessages[cal_log::kRingLines][cal_log::kRingEntry];
 extern size_t logHead;
+extern uint32_t rtcLogMagic;  // 0xDEADBEEF — кольцо инициализировано (иначе в RTC-памяти мусор после холодного старта)
 
 namespace cal_log {
 
@@ -38,7 +39,7 @@ std::atomic<bool> g_finalFlush{false};  // выключили — дописат
 uint32_t g_lastFlushMs = 0;
 uint32_t g_lastPollMs = 0;
 size_t g_lastHead = static_cast<size_t>(-1);
-std::string g_tail;
+RingCursor g_cursor;
 
 void stamp(char* out, size_t n) {
   const uint32_t ms = millis();
@@ -71,9 +72,11 @@ void mirror(uint32_t now) {
   if (head == g_lastHead && now - g_lastPollMs < kPollEveryMs) return;
   g_lastHead = head;
   g_lastPollMs = now;
+  if (rtcLogMagic != 0xDEADBEEFu || head >= kRingLines) return;  // кольцо ещё не заведено
   bool lost = false;
-  const std::string fresh = newSince(getLastLogs(), g_tail, lost);
-  if (fresh.empty()) return;
+  std::string fresh;
+  collect(logMessages, head, g_cursor, fresh, lost);
+  if (fresh.empty() && !lost) return;
   char st[40];
   stamp(st, sizeof(st));
   std::string out;
@@ -88,7 +91,7 @@ void mirror(uint32_t now) {
     const size_t end = nl == std::string::npos ? fresh.size() : nl;
     const std::string_view l(fresh.data() + pos, end - pos);
     pos = end + 1;
-    // Свои строки (line() дублирует их в LOG_DBG «CAL») в журнале уже есть — не повторяем.
+    // Свои строки в журнале уже есть (в кольцо прошивки они больше не пишутся, но старые могли остаться).
     if (l.empty() || l.find("] [CAL] ") != std::string_view::npos) continue;
     out += st;
     out += " ~ ";
@@ -148,7 +151,7 @@ void setEnabled(bool on) {
   if (was == on) return;
   if (on) {
     g_finalFlush = false;
-    g_tail.clear();  // первым делом скопируем то, что уже лежит в кольце прошивки: видно, что было перед включением
+    g_cursor = RingCursor{};  // первым делом скопируем то, что уже лежит в кольце прошивки: видно, что было перед включением
     g_lastHead = static_cast<size_t>(-1);
     line("LOG", "журнал включён");
   } else {
@@ -168,7 +171,11 @@ void line(const char* tag, const char* fmt, ...) {
   va_start(ap, fmt);
   std::vsnprintf(msg, sizeof(msg), fmt, ap);
   va_end(ap);
-  LOG_DBG("CAL", "[%s] %s", tag, msg);
+#if defined(ENABLE_SERIAL_LOG) && LOG_LEVEL >= 2
+  // В USB-лог — напрямую, не через LOG_DBG: тот пишет ещё и в 16-строчное кольцо прошивки, и частые строки календаря
+  // вытесняли из него сообщения самой прошивки раньше, чем журнал успевал их скопировать.
+  if (logSerial) logSerial.printf("[%lu] [CAL] [%s] %s\n", static_cast<unsigned long>(millis()), tag, msg);
+#endif
   if (!g_on.load()) return;
   char st[40];
   stamp(st, sizeof(st));

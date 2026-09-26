@@ -209,6 +209,118 @@ int main(int argc, char** argv) {
     CHECK(o.weather.atLat == 10.5 && o.weather.atLon == 20.5 && o.place.ssid[0] == '\0');
     CHECK(samePlace(55.75, 37.62, 55.76, 37.60) && !samePlace(55.75, 37.62, 55.85, 37.62) && !samePlace(NAN, 0, 0, 0));
   }
+  // --- MET Norway: значки → WMO ---
+  {
+    CHECK(metSymbolToWmo("clearsky_day") == 0 && metSymbolToWmo("clearsky_night") == 0 && metSymbolToWmo("fair_polartwilight") == 1);
+    CHECK(metSymbolToWmo("partlycloudy_night") == 2 && metSymbolToWmo("cloudy") == 3 && metSymbolToWmo("fog") == 45);
+    CHECK(metSymbolToWmo("lightrain") == 61 && metSymbolToWmo("rain") == 63 && metSymbolToWmo("heavyrain") == 65);
+    CHECK(metSymbolToWmo("lightrainshowers_day") == 80 && metSymbolToWmo("rainshowers_night") == 81 && metSymbolToWmo("heavyrainshowers_day") == 82);
+    CHECK(metSymbolToWmo("lightsnow") == 71 && metSymbolToWmo("snow") == 73 && metSymbolToWmo("heavysnow") == 75);
+    CHECK(metSymbolToWmo("snowshowers_day") == 85 && metSymbolToWmo("heavysnowshowers_night") == 86);
+    CHECK(metSymbolToWmo("lightsleet") == 68 && metSymbolToWmo("heavysleet") == 69 && metSymbolToWmo("lightsleetshowers_day") == 83 &&
+          metSymbolToWmo("sleetshowers_night") == 84);
+    CHECK(metSymbolToWmo("rainandthunder") == 95 && metSymbolToWmo("lightssleetshowersandthunder_day") == 95);  // опечатка MET
+    CHECK(metSymbolToWmo("") == -1 && metSymbolToWmo(nullptr) == -1 && metSymbolToWmo("sandstorm") == -1);
+    for (int code : {68, 69, 83, 84}) {
+      for (Lang l : {Lang::En, Lang::Ru, Lang::De}) CHECK(description(l, code)[0] != '\0');
+      CHECK(iconFor(code, true) == Icon::Snow);
+    }
+  }
+  // --- MET Norway: настоящий ответ (Москва, 26.09.2026, первый шаг 13:00 UTC) ---
+  {
+    const std::string j = slurp((dir + "/metno_moscow_complete.json").c_str());
+    const uint32_t t13 = static_cast<uint32_t>(calendar_core::daysFromCivil(2026, 9, 26)) * 86400u + 13 * 3600u;
+    const uint32_t now = t13 + 34 * 60;  // 16:34 по Москве
+    const int32_t off = 3 * 3600;
+    Weather w;
+    Forecast f;
+    CHECK(parseMetNo(j.data(), j.size(), now, 55.752, 37.6178, off, w, &f));
+    CHECK(w.valid && w.provider == Provider::MetNo && w.fetchedEpoch == now);
+    CHECK(std::fabs(w.temp - 15.8f) < 0.01f && !std::isnan(w.feels) && !std::isnan(w.windMs));
+    CHECK(w.code == 3 && w.isDay);  // «cloudy»; 16:34 — ещё день
+    CHECK(!std::isnan(w.tMin) && !std::isnan(w.tMax) && w.tMin <= w.temp && w.temp <= w.tMax);
+    CHECK(!std::isnan(w.precipMm) && w.precipMm >= 0 && w.precipProb == -1);  // вероятности для России у MET нет
+    CHECK(f.valid && f.provider == Provider::MetNo && f.utcOffsetSec == off);
+    CHECK(f.nHours == kFcHours && f.h[0].ts == t13);
+    for (int i = 1; i < f.nHours; ++i) CHECK(f.h[i].ts == f.h[i - 1].ts + 3600);
+    for (int i = 0; i < f.nHours; ++i) CHECK(!std::isnan(f.h[i].temp) && f.h[i].code >= 0 && !std::isnan(f.h[i].mm) && f.h[i].prob == -1);
+    // 23:00 по Москве (20:00 UTC) — ночь; 10:00 по Москве завтра (07:00 UTC) — день.
+    CHECK(!f.h[7].isDay && f.h[18].isDay);
+    CHECK(f.nDays == kFcDays);
+    for (int i = 0; i < f.nDays; ++i) {
+      CHECK(static_cast<int64_t>(f.d[i].ts) + off == static_cast<int64_t>(calendar_core::daysFromCivil(2026, 9, 26) + i) * 86400);
+      CHECK(!std::isnan(f.d[i].tMin) && !std::isnan(f.d[i].tMax) && f.d[i].tMin <= f.d[i].tMax);
+      CHECK(!std::isnan(f.d[i].precipMm) && f.d[i].code >= 0 && !std::isnan(f.d[i].windMax));
+    }
+    // Мусор — не разобрано, прежние данные не тронуты.
+    for (const char* bad : {"", "{}", "not json", R"({"properties":{"timeseries":[]}})",
+                            R"({"properties":{"timeseries":[{"time":"2026-09-26T13:00:00Z","data":{"instant":{"details":{}}}}]}})"}) {
+      Weather keep = w;
+      Forecast kf = f;
+      CHECK(!parseMetNo(bad, std::strlen(bad), now, 55.75, 37.6, off, keep, &kf));
+      CHECK(keep.temp == w.temp && kf.nHours == f.nHours);
+    }
+    // Нет «ощущается» — считается по температуре, влажности и ветру (как у Open-Meteo).
+    const char* noFeels = R"({"properties":{"timeseries":[{"time":"2026-01-10T12:00:00Z","data":{"instant":{"details":{"air_temperature":-10.0,"relative_humidity":80.0,"wind_speed":5.0}},"next_1_hours":{"summary":{"symbol_code":"snow"},"details":{"precipitation_amount":0.4}}}}]}})";
+    const uint32_t jan = static_cast<uint32_t>(calendar_core::daysFromCivil(2026, 1, 10)) * 86400u + 12 * 3600u;
+    Weather nf;
+    CHECK(parseMetNo(noFeels, std::strlen(noFeels), jan + 60, 55.75, 37.6, off, nf));
+    CHECK(nf.feels < -15.f && nf.feels > -20.f && nf.code == 73 && std::fabs(nf.precipMm - 0.4f) < 1e-4);
+  }
+  // --- Nominatim: настоящие ответы ---
+  {
+    const std::string j = slurp((dir + "/nominatim_moskva_ru.json").c_str());
+    GeoHit h[kMaxGeoHits];
+    // Москва-регион и Москва-город с одинаковой подписью — одна строка, с координатами города.
+    CHECK(parseNominatim(j.data(), j.size(), h, kMaxGeoHits) == 1);
+    CHECK(std::string(h[0].name) == "Москва" && std::string(h[0].region) == "Центральный федеральный округ, Россия");
+    CHECK(h[0].lat > 55.74 && h[0].lat < 55.76 && h[0].lon > 37.6 && h[0].lon < 37.63);
+    const std::string none = slurp((dir + "/nominatim_none.json").c_str());
+    CHECK(parseNominatim(none.data(), none.size(), h, kMaxGeoHits) == 0);
+    for (const char* bad : {"", "x", "{}", "[{"}) CHECK(parseNominatim(bad, std::strlen(bad), h, kMaxGeoHits) == -1);
+    const char* two = R"([{"name":"A","lat":"1.5","lon":"2.5","display_name":"A, R1"},{"name":"B","lat":"x","lon":"1"},{"name":"C","lat":"3","lon":"4","display_name":"Other"}])";
+    CHECK(parseNominatim(two, std::strlen(two), h, kMaxGeoHits) == 2 && std::string(h[0].region) == "R1" && std::string(h[1].region) == "Other");
+    CHECK(parseNominatim(two, std::strlen(two), h, 1) == 1);
+  }
+  // --- URL запасных путей ---
+  {
+    char u[700];
+    CHECK(buildForecastUrl(55.7558, 37.6173, u, sizeof(u), false) > 0 && std::string(u).rfind("http://api.open-meteo.com/v1/forecast?latitude=55.76&longitude=37.62&", 0) == 0);
+    CHECK(buildMetNoUrl(55.75581, 37.61733, u, sizeof(u)) > 0 &&
+          std::string(u) == "https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=55.7558&lon=37.6173");
+    CHECK(buildNominatimUrl("Нижний Новгород", Lang::Ru, u, sizeof(u)) > 0 &&
+          std::string(u).find("q=%D0%9D%D0%B8%D0%B6%D0%BD%D0%B8%D0%B9%20") != std::string::npos &&
+          std::string(u).find("&format=jsonv2&limit=5&featureType=settlement&accept-language=ru") != std::string::npos);
+    CHECK(buildGeocodeUrl("Berlin", Lang::De, u, sizeof(u), false) > 0 && std::string(u).rfind("http://geocoding-api.open-meteo.com/", 0) == 0);
+  }
+  // --- Кэш: источник погоды, путь, осадки по часам ---
+  {
+    Cache c;
+    c.weather.valid = true;
+    c.weather.temp = 1;
+    c.weather.provider = Provider::MetNo;
+    c.fc.valid = true;
+    c.fc.provider = Provider::MetNo;
+    c.fc.nHours = 2;
+    c.fc.h[0].ts = 100;
+    c.fc.h[0].mm = 0.3f;
+    c.fc.h[1].ts = 3700;
+    c.route = Route::MetNo;
+    c.routeAt = 12345;
+    const std::string s = serializeCache(c);
+    Cache r;
+    CHECK(parseCache(s.data(), s.size(), r));
+    CHECK(r.weather.provider == Provider::MetNo && r.fc.provider == Provider::MetNo && r.route == Route::MetNo && r.routeAt == 12345);
+    CHECK(std::fabs(r.fc.h[0].mm - 0.3f) < 1e-4 && std::isnan(r.fc.h[1].mm));
+    Cache d;  // по умолчанию — Open-Meteo, основной путь; в файле этих полей нет
+    const std::string sd = serializeCache(d);
+    CHECK(sd.find("route") == std::string::npos && sd.find("src") == std::string::npos);
+    Cache rd;
+    CHECK(parseCache(sd.data(), sd.size(), rd) && rd.route == Route::OpenMeteoHttps && rd.routeAt == 0);
+    const char* junk = R"({"place":{"lat":1,"lon":2},"route":9,"routeAt":5})";
+    CHECK(parseCache(junk, std::strlen(junk), rd) && rd.route == Route::OpenMeteoHttps);
+    CHECK(std::string(providerName(Provider::MetNo)) == "MET Norway" && std::string(providerName(Provider::OpenMeteo)) == "Open-Meteo.com");
+  }
   std::printf("weather: ошибок %d\n", fails);
   return fails;
 }

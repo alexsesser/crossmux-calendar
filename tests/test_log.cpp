@@ -1,8 +1,24 @@
-// cal_log::newSince — что в новом снимке кольцевого буфера сообщений прошивки появилось после прошлого снимка.
+// cal_log::collect — копирование кольцевого буфера сообщений прошивки (16 ячеек × 256 байт) по ячейкам.
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 #include "../overlay/src/activities/apps/standby/CalendarLog.h"
+
+namespace {
+
+// Как addToLogRingBuffer() в lib/Logging/Logging.cpp.
+struct Ring {
+  char cells[cal_log::kRingLines][cal_log::kRingEntry] = {};
+  size_t head = 0;
+  void add(const std::string& s) {
+    std::strncpy(cells[head], s.c_str(), cal_log::kRingEntry - 1);
+    cells[head][cal_log::kRingEntry - 1] = '\0';
+    head = (head + 1) % cal_log::kRingLines;
+  }
+};
+
+}  // namespace
 
 int main() {
   int fails = 0;
@@ -12,37 +28,67 @@ int main() {
       ++fails;
     }
   };
-  std::string tail;
+  Ring ring;
+  cal_log::RingCursor cur;
   bool lost = true;
-  // Первый снимок: всё новое, ничего не потеряно.
-  const std::string s1 = "[100] [INF] [A] one\n[200] [ERR] [HTTP] two\n";
-  check(cal_log::newSince(s1, tail, lost) == s1 && !lost, "первый снимок целиком");
-  // Ничего не изменилось — пусто.
-  check(cal_log::newSince(s1, tail, lost).empty() && !lost, "без изменений пусто");
-  // Добавились строки (и самые старые ушли из кольца) — только новые.
-  const std::string s2 = "[200] [ERR] [HTTP] two\n[300] [DBG] [WX] three\n[400] [DBG] [WX] four\n";
-  check(cal_log::newSince(s2, tail, lost) == "[300] [DBG] [WX] three\n[400] [DBG] [WX] four\n" && !lost, "только новые");
-  // Кольцо обернулось целиком — всё как новое, с пометкой «могло пропасть».
-  const std::string s3 = "[900] [INF] [X] nine\n[950] [INF] [X] ten\n";
-  check(cal_log::newSince(s3, tail, lost) == s3 && lost, "полный оборот кольца");
-  // Длинные строки (хвост 96 байт ищется внутри последней строки).
-  std::string longLine = "[1000] [DBG] [HTTP] Fetching: https://api.open-meteo.com/v1/forecast?latitude=55.7558&longitude=37.6173&current=temperature_2m\n";
-  const std::string s4 = s3 + longLine;
-  check(cal_log::newSince(s4, tail, lost) == longLine && !lost, "длинная строка");
-  const std::string s5 = longLine + "[1100] [INF] [Y] after\n";
-  check(cal_log::newSince(s5, tail, lost) == "[1100] [INF] [Y] after\n" && !lost, "после длинной строки");
-  // Одинаковые по тексту строки (тот же запрос раз в 5 минут) различаются временем — строки между ними не теряются.
-  tail.clear();
-  const std::string a = "[10] [DBG] [HTTP] Fetching: X\n";
-  check(cal_log::newSince(a, tail, lost) == a, "повтор: первая");
-  const std::string b = a + "[20] [INF] [Y] mid\n[30] [DBG] [HTTP] Fetching: X\n";
-  check(cal_log::newSince(b, tail, lost) == "[20] [INF] [Y] mid\n[30] [DBG] [HTTP] Fetching: X\n" && !lost, "повтор: между");
-  // Строка без перевода строки в конце (обрезана буфером прошивки) — тоже якорь.
-  tail.clear();
-  (void)cal_log::newSince("[1] [I] [Z] x\n[2] [I] [Z] cut", tail, lost);
-  check(cal_log::newSince("[1] [I] [Z] x\n[2] [I] [Z] cut[3] [I] [Z] y\n", tail, lost) == "[3] [I] [Z] y\n" && !lost, "обрезанная строка");
-  // Пустой снимок (буфер очищен) — ничего и без пометки.
-  check(cal_log::newSince("", tail, lost).empty() && !lost, "пустой снимок");
+  std::string out;
+
+  // Первое чтение: всё, что уже есть, от старой строки к новой.
+  ring.add("[100] [INF] [A] one\n");
+  ring.add("[200] [ERR] [HTTP] two\n");
+  cal_log::collect(ring.cells, ring.head, cur, out, lost);
+  check(out == "[100] [INF] [A] one\n[200] [ERR] [HTTP] two\n" && !lost, "первое чтение");
+
+  // Ничего нового — пусто.
+  out.clear();
+  cal_log::collect(ring.cells, ring.head, cur, out, lost);
+  check(out.empty() && !lost, "без изменений пусто");
+
+  // Длинная строка обрезана кольцом без перевода строки — отдельной строкой, и следующая не «склеивается» с ней.
+  const std::string url(400, 'u');
+  ring.add("[300] [DBG] [HTTP] Fetching: " + url + "\n");
+  ring.add("[310] [DBG] [HTTP] wolfSSL GET: " + url + "\n");
+  ring.add("[320] [INF] [CLK] synced\n");
+  out.clear();
+  cal_log::collect(ring.cells, ring.head, cur, out, lost);
+  size_t lines = 0;
+  for (char ch : out) lines += ch == '\n';
+  check(lines == 3 && !lost, "обрезанные длинные строки — по одной");
+  check(out.find("[320] [INF] [CLK] synced\n") != std::string::npos, "строка после обрезанной цела");
+  out.clear();
+  cal_log::collect(ring.cells, ring.head, cur, out, lost);
+  check(out.empty() && !lost, "обрезанные строки не повторяются");
+
+  // Одинаковые по тексту сообщения подряд (кроме времени) — все новые.
+  ring.add("[400] [DBG] [HTTP] Fetching: X\n");
+  ring.add("[401] [DBG] [HTTP] Fetching: X\n");
+  out.clear();
+  cal_log::collect(ring.cells, ring.head, cur, out, lost);
+  check(out == "[400] [DBG] [HTTP] Fetching: X\n[401] [DBG] [HTTP] Fetching: X\n" && !lost, "повторы");
+
+  // Ровно 15 новых строк — ничего не потеряно.
+  for (int i = 0; i < 15; ++i) ring.add("[5" + std::to_string(i) + "] [I] [Z] fifteen\n");
+  out.clear();
+  cal_log::collect(ring.cells, ring.head, cur, out, lost);
+  lines = 0;
+  for (char ch : out) lines += ch == '\n';
+  check(lines == 15 && !lost, "15 строк без потерь");
+
+  // Больше, чем ячеек в кольце — пометка «могло пропасть» и всё кольцо.
+  for (int i = 0; i < 20; ++i) ring.add("[6" + std::to_string(i) + "] [I] [Z] twenty\n");
+  out.clear();
+  cal_log::collect(ring.cells, ring.head, cur, out, lost);
+  lines = 0;
+  for (char ch : out) lines += ch == '\n';
+  check(lines == 16 && lost, "оборот кольца");
+  check(out.rfind("[619] [I] [Z] twenty\n") == out.size() - std::strlen("[619] [I] [Z] twenty\n"), "последняя строка — последней");
+
+  // После оборота — снова только новое.
+  ring.add("[700] [I] [Z] after\n");
+  out.clear();
+  cal_log::collect(ring.cells, ring.head, cur, out, lost);
+  check(out == "[700] [I] [Z] after\n" && !lost, "после оборота");
+
   std::printf("log: ошибок %d\n", fails);
   return fails;
 }

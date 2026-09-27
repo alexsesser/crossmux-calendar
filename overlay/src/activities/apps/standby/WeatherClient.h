@@ -128,6 +128,7 @@ class WeatherClient {
   int32_t histToday_ = 0;
   bool histQueued_ = false;         // запрос архива ещё не отправлен в сеть
   bool histInJob_ = false;          // идущая задача грузит архив для histWant_
-  int32_t histFailed_ = 0;          // для этого дня архив не загрузился…
+  int32_t histFailed_ = 0;          // для этих дней [histFailed_, histFailedTo_] данные не загрузились…
+  int32_t histFailedTo_ = 0;
   uint32_t histFailedMs_ = 0;       // …тогда (millis): повтор не раньше kRetryAfterFailMin
 };

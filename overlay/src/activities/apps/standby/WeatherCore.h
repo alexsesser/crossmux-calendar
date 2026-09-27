@@ -92,6 +92,9 @@ struct FcDay {
   int8_t prob = -1;
 };
 
+// В дне прогноза есть хоть что-то (последний из 16 дней Open-Meteo бывает целиком пустым).
+inline bool hasData(const FcDay& d) { return !std::isnan(d.tMax) || !std::isnan(d.tMin) || d.code >= 0; }
+
 struct Forecast {
   bool valid = false;  // есть хотя бы один час или день
   uint8_t nHours = 0;

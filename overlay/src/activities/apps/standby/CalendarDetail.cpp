@@ -76,7 +76,6 @@ struct Txt {
   const char* histArchive;
   const char* histRecorded;
   const char* histLoading;
-  const char* histFailed;
   const char* histNone;
   const char* refresh;
   const char* refreshing;
@@ -96,7 +95,7 @@ const Txt kRu = {"Назад", "Сегодня", "сегодня", "завтра
                  "Взять этот город", "Найти город", "Ищу «%s»...", "Выберите город:", "Не найдено: «%s»",
                  "Поиск не удался: нет сети?", "Журнал на SD: вкл", "Журнал на SD: выкл", "%s",
                  "Координаты", "Сохранённые:", "Не координаты: «%s»", "Архив Open-Meteo",
-                 "Сохранённый прогноз", "Загружаю архив погоды...", "Архив недоступен: нет связи",
+                 "Сохранённый прогноз", "Загружаю архив погоды...",
                  "Нет данных за этот день", "Обновить", "Обновляю...", "Обычно в этот день", "в среднем за %d %s",
                  "Считаю норму по архиву...", "Дальний прогноз", "Полн.", "нов."};
 const Txt kEn = {"Back", "Today", "today", "tomorrow", "yesterday", "in %d days", "%d days ago", "Day",
@@ -107,7 +106,7 @@ const Txt kEn = {"Back", "Today", "today", "tomorrow", "yesterday", "in %d days"
                  "Use this city", "Find city", "Searching \"%s\"...", "Pick a city:", "Not found: \"%s\"",
                  "Search failed: no network?", "SD log: on", "SD log: off", "%s",
                  "Coordinates", "Saved:", "Not coordinates: \"%s\"", "Open-Meteo archive",
-                 "Saved forecast", "Loading weather archive...", "Archive unavailable: no connection",
+                 "Saved forecast", "Loading weather archive...",
                  "No data for this day", "Refresh", "Updating...", "Typical for this day", "average of %d %s",
                  "Computing the norm...", "Long-range forecast", "Full", "new"};
 const Txt kDe = {"Zurück", "Heute", "heute", "morgen", "gestern", "in %d Tagen", "vor %d Tagen", "Tag",
@@ -118,7 +117,7 @@ const Txt kDe = {"Zurück", "Heute", "heute", "morgen", "gestern", "in %d Tagen"
                  "Diesen Ort nehmen", "Ort suchen", "Suche \"%s\"...", "Ort wählen:", "Nicht gefunden: \"%s\"",
                  "Suche fehlgeschlagen: kein Netz?", "SD-Log: an", "SD-Log: aus", "%s",
                  "Koordinaten", "Gespeichert:", "Keine Koordinaten: \"%s\"", "Open-Meteo-Archiv",
-                 "Gespeicherte Vorhersage", "Lade Wetterarchiv...", "Archiv nicht erreichbar",
+                 "Gespeicherte Vorhersage", "Lade Wetterarchiv...",
                  "Keine Daten für diesen Tag", "Aktualisieren", "Lade...", "Üblich an diesem Tag", "Mittel aus %d %s",
                  "Berechne Klimanorm...", "Langfristprognose", "Voll", "Neu"};
 
@@ -869,7 +868,7 @@ int drawWeatherCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt
   if (v.fcOk && !past) {
     for (int i = 0; i < fc.nDays; ++i) {
       const Ymd dt = fromEpoch(fc.d[i].ts, fc.utcOffsetSec);
-      if (calendar_core::daysFromCivil(dt.y, dt.m, dt.d) == target) idx = i;
+      if (calendar_core::daysFromCivil(dt.y, dt.m, dt.d) == target && weather_core::hasData(fc.d[i])) idx = i;
     }
   }
   const weather_core::HistDay* h =
@@ -887,11 +886,14 @@ int drawWeatherCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt
   Card k = beginCard(r, x, y, w, cap, draw);
   const auto& WL = weather_core::labels(c.lang);
 
-  if (idx < 0 && !h) {  // данных нет: загружается, не удалось или прогноза на этот день нет
-    const char* msg = c.histState == HistState::Waiting ? (past ? T.histLoading : T.climLoading)
-                      : c.histState == HistState::Failed ? T.histFailed
-                      : past                             ? T.histNone
-                                                         : T.fcOnly;
+  if (idx < 0 && !h) {
+    // Данных ещё нет — сразу «Загружаю…» (прошедший день) или «Считаю…» (будущий): запрос уходит в ближайший такт.
+    // Заглушка «нет данных / прогноза» — только если не получилось (нет сети, сервер не ответил) или данных нет
+    // в принципе (архив — с 1940 года).
+    const bool fetchable = !past || packDate(s.dayY, s.dayM, s.dayD) >= 19400101;
+    const char* msg = (c.histState == HistState::Failed || !fetchable) ? (past ? T.histNone : T.fcOnly)
+                      : past                                           ? T.histLoading
+                                                                       : T.climLoading;
     if (draw) {
       const Fit t(r, kFontSmall, msg, w - 16);
       drawCentered(r, kFontSmall, x, w, k.cy + 4, t.c_str());

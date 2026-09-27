@@ -322,7 +322,7 @@ int main(int argc, char** argv) {
     CHECK(parseCache(sd.data(), sd.size(), rd) && rd.route == Route::OpenMeteoHttps && rd.routeAt == 0);
     const char* junk = R"({"place":{"lat":1,"lon":2},"route":9,"routeAt":5})";
     CHECK(parseCache(junk, std::strlen(junk), rd) && rd.route == Route::OpenMeteoHttps);
-    CHECK(std::string(providerName(Provider::MetNo)) == "MET Norway" && std::string(providerName(Provider::OpenMeteo)) == "Open-Meteo.com");
+    CHECK(std::string(providerName(Provider::MetNo)) == "MET Norway" && std::string(providerName(Provider::OpenMeteo)) == "Open-Meteo");
   }
   // --- Сохранённые места: новое — первым, повтор (≈ 5 км) заменяет, лишнее выпадает; круг через файл настроек ---
   {
@@ -379,6 +379,13 @@ int main(int argc, char** argv) {
     char u[400];
     CHECK(buildArchiveUrl(55.7558, 37.6173, 20260919, 20260925, u, sizeof(u)) > 0 &&
           std::string(u).find("https://archive-api.open-meteo.com/v1/archive?latitude=55.76&longitude=37.62&start_date=2026-09-19&end_date=2026-09-25") == 0);
+  }
+  // --- Пустой хвост прогноза (16-й день без данных) отбрасывается ---
+  {
+    const char* j = R"({"current":{"temperature_2m":5.0},"daily":{"time":[100000,186400,272800],"temperature_2m_max":[7.0,8.0,null],"temperature_2m_min":[1.0,2.0,null],"weather_code":[3,61,null]}})";
+    Weather w;
+    Forecast f;
+    CHECK(parseForecast(j, std::strlen(j), 1, w, &f) && f.nDays == 2);
   }
   // --- Климатическая норма: окна по годам, среднее, доля дней с осадками ---
   {

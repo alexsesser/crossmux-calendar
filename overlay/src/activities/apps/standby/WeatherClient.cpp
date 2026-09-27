@@ -777,7 +777,7 @@ bool WeatherClient::forecastCovers(int32_t date, uint32_t nowEpoch) const {
     int y;
     unsigned m, d;
     calendar_core::civilFromDays(static_cast<int32_t>((static_cast<int64_t>(f.d[i].ts) + f.utcOffsetSec) / 86400), y, m, d);
-    if (y * 10000 + static_cast<int32_t>(m) * 100 + static_cast<int32_t>(d) == date) return true;
+    if (y * 10000 + static_cast<int32_t>(m) * 100 + static_cast<int32_t>(d) == date) return weather_core::hasData(f.d[i]);
   }
   return false;
 }
@@ -798,7 +798,7 @@ void WeatherClient::wantHistory(int32_t date, int32_t today, uint32_t now) {
     histQueued_ = false;
     return;
   }
-  if (date == histFailed_ && millis() - histFailedMs_ < kFailRetryMs) return;  // не долбим: недавно не удалось
+  if (date >= histFailed_ && date <= histFailedTo_ && millis() - histFailedMs_ < kFailRetryMs) return;  // недавно не удалось
   if (date == histWant_ && (histQueued_ || histInJob_)) return;
   histWant_ = date;
   histQueued_ = true;
@@ -806,7 +806,7 @@ void WeatherClient::wantHistory(int32_t date, int32_t today, uint32_t now) {
 
 WeatherClient::Hist WeatherClient::historyState(int32_t date) const {
   if (date == histWant_ && (histQueued_ || histInJob_)) return Hist::Waiting;
-  if (date == histFailed_) return Hist::Failed;
+  if (histFailed_ && date >= histFailed_ && date <= histFailedTo_) return Hist::Failed;
   return Hist::None;
 }
 
@@ -1082,7 +1082,7 @@ void WeatherClient::startJob(GfxRenderer& renderer, uint32_t nowEpoch, calendar_
       }
       if (histQueued_) {
         histQueued_ = false;
-        histFailed_ = histWant_;
+        histFailed_ = histFailedTo_ = histWant_;
         histFailedMs_ = millis();
       }
       nextTryMs_ = millis() + kNoCredsRetryMs;
@@ -1215,7 +1215,25 @@ void WeatherClient::applyJob(Job& j, uint32_t nowEpoch) {
       if (j.nHistOut > 0 || j.nClimOut > 0) histDirty_ = true;
       const bool asked = (j.histFrom && histWant_ >= j.histFrom && histWant_ <= j.histTo) || (j.climDate && histWant_ == j.climDate);
       if (!gotWanted && asked) {  // не дошло до запроса (нет Wi-Fi), сервер не ответил или дня в архиве ещё нет
-        histFailed_ = histWant_;
+        histFailed_ = histFailedTo_ = histWant_;
+        // Не пришло ничего — неудача на весь запрошенный диапазон: листая соседние дни, не ждать снова те же секунды.
+        if (j.nHistOut == 0 && j.nClimOut == 0) {
+          if (j.histFrom) {
+            histFailed_ = j.histFrom;
+            histFailedTo_ = j.histTo;
+          } else {
+            const int32_t c = calendar_core::daysFromCivil(j.climDate / 10000, static_cast<unsigned>(j.climDate / 100 % 100),
+                                                           static_cast<unsigned>(j.climDate % 100));
+            auto pack = [](int32_t idx) {
+              int y;
+              unsigned m, d;
+              calendar_core::civilFromDays(idx, y, m, d);
+              return y * 10000 + static_cast<int32_t>(m) * 100 + static_cast<int32_t>(d);
+            };
+            histFailed_ = pack(c - weather_core::ClimateAcc::kSpan);
+            histFailedTo_ = pack(c + weather_core::ClimateAcc::kSpan);
+          }
+        }
         histFailedMs_ = millis();
       }
       histInJob_ = false;

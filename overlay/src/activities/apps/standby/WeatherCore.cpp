@@ -93,7 +93,7 @@ const char* description(Lang lang, int code) {
 
 const Labels& labels(Lang lang) { return lang == Lang::Ru ? kLabelsRu : lang == Lang::De ? kLabelsDe : kLabelsEn; }
 
-const char* providerName(Provider p) { return p == Provider::MetNo ? "MET Norway" : "Open-Meteo.com"; }
+const char* providerName(Provider p) { return p == Provider::MetNo ? "MET Norway" : "Open-Meteo"; }
 
 const char* routeName(Route r) {
   switch (r) {
@@ -381,8 +381,12 @@ bool fillForecast(const JsonDocument& doc, uint32_t nowEpoch, Forecast& out) {
                  ? static_cast<int8_t>(doc["daily"]["precipitation_probability_max"][i].as<int>())
                  : -1;
   }
-  f.nDays = static_cast<uint8_t>(nd);
-  f.valid = nh > 0 || nd > 0;
+  // Хвост прогноза бывает пустым (последний из 16 дней: модель кончается раньше местных суток) — такие дни не берём.
+  size_t kept = nd;
+  while (kept > 0 && std::isnan(f.d[kept - 1].tMax) && std::isnan(f.d[kept - 1].tMin) && f.d[kept - 1].code < 0) --kept;
+  const size_t ndKept = kept;
+  f.nDays = static_cast<uint8_t>(ndKept);
+  f.valid = nh > 0 || ndKept > 0;
   if (!f.valid) return false;
   out = f;
   return true;

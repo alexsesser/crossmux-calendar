@@ -80,38 +80,47 @@ struct Txt {
   const char* histNone;
   const char* refresh;
   const char* refreshing;
+  const char* climTitle;    // заголовок карточки нормы
+  const char* climDesc;     // «в среднем за %d %s»
+  const char* climLoading;
+  const char* farFc;        // прогноз дальше 7 дней: заметно менее точный
+  const char* fullShort;    // «Полн.» — для узкой колонки
+  const char* newShort;     // «нов.»
 };
 
 const Txt kRu = {"Назад", "Сегодня", "сегодня", "завтра", "вчера", "через %d дн.", "%d дн. назад", "День",
                  "Солнце", "Луна", "Погода", "освещена %d %%", "лунный день %d", "Полнолуние", "новолуние",
-                 "%c%d мин к вчера", "Прогноз доступен на 7 дней вперёд", "7 дней",
+                 "%c%d мин к вчера", "Прогноза на этот день нет", "7 дней",
                  "Загрузится при подключении к Wi-Fi", "сегодня",
                  "Место", "Авто (по IP)", "Вручную", "По IP", "ещё не определялось", "сеть «%s» · %s",
                  "Взять этот город", "Найти город", "Ищу «%s»...", "Выберите город:", "Не найдено: «%s»",
                  "Поиск не удался: нет сети?", "Журнал на SD: вкл", "Журнал на SD: выкл", "%s",
                  "Координаты", "Сохранённые:", "Не координаты: «%s»", "Архив Open-Meteo",
                  "Сохранённый прогноз", "Загружаю архив погоды...", "Архив недоступен: нет связи",
-                 "Нет данных за этот день", "Обновить", "Обновляю..."};
+                 "Нет данных за этот день", "Обновить", "Обновляю...", "Обычно в этот день", "в среднем за %d %s",
+                 "Считаю норму по архиву...", "Дальний прогноз", "Полн.", "нов."};
 const Txt kEn = {"Back", "Today", "today", "tomorrow", "yesterday", "in %d days", "%d days ago", "Day",
                  "Sun", "Moon", "Weather", "%d %% lit", "lunar day %d", "Full moon", "new moon",
-                 "%c%d min vs yesterday", "Forecast covers the next 7 days", "7 days",
+                 "%c%d min vs yesterday", "No forecast for this day", "7 days",
                  "Loads when Wi-Fi is available", "today",
                  "Location", "Auto (by IP)", "Manual", "By IP", "not detected yet", "network \"%s\" · %s",
                  "Use this city", "Find city", "Searching \"%s\"...", "Pick a city:", "Not found: \"%s\"",
                  "Search failed: no network?", "SD log: on", "SD log: off", "%s",
                  "Coordinates", "Saved:", "Not coordinates: \"%s\"", "Open-Meteo archive",
                  "Saved forecast", "Loading weather archive...", "Archive unavailable: no connection",
-                 "No data for this day", "Refresh", "Updating..."};
+                 "No data for this day", "Refresh", "Updating...", "Typical for this day", "average of %d %s",
+                 "Computing the norm...", "Long-range forecast", "Full", "new"};
 const Txt kDe = {"Zurück", "Heute", "heute", "morgen", "gestern", "in %d Tagen", "vor %d Tagen", "Tag",
                  "Sonne", "Mond", "Wetter", "%d %% hell", "Mondtag %d", "Vollmond", "Neumond",
-                 "%c%d Min zu gestern", "Vorhersage für die nächsten 7 Tage", "7 Tage",
+                 "%c%d Min zu gestern", "Keine Vorhersage für diesen Tag", "7 Tage",
                  "Wird bei WLAN geladen", "heute",
                  "Ort", "Auto (per IP)", "Manuell", "Per IP", "noch nicht ermittelt", "Netz \"%s\" · %s",
                  "Diesen Ort nehmen", "Ort suchen", "Suche \"%s\"...", "Ort wählen:", "Nicht gefunden: \"%s\"",
                  "Suche fehlgeschlagen: kein Netz?", "SD-Log: an", "SD-Log: aus", "%s",
                  "Koordinaten", "Gespeichert:", "Keine Koordinaten: \"%s\"", "Open-Meteo-Archiv",
                  "Gespeicherte Vorhersage", "Lade Wetterarchiv...", "Archiv nicht erreichbar",
-                 "Keine Daten für diesen Tag", "Aktualisieren", "Lade..."};
+                 "Keine Daten für diesen Tag", "Aktualisieren", "Lade...", "Üblich an diesem Tag", "Mittel aus %d %s",
+                 "Berechne Klimanorm...", "Langfristprognose", "Voll", "Neu"};
 
 const Txt& txt(Lang l) { return l == Lang::Ru ? kRu : l == Lang::De ? kDe : kEn; }
 
@@ -294,6 +303,32 @@ int drawCurrent(GfxRenderer& r, int x, int y, int w, const Ctx& c, const WxView&
   const int textX = tx + tw + 14;
   const char* desc = (ok && cur.code >= 0) ? weather_core::description(c.lang, cur.code) : "";
   if (!desc[0]) desc = WL.noData;
+  if (land) {
+    // Узкая колонка: справа от температуры — «ощущ.» и мин/макс мелко, описание — своей строкой во всю ширину
+    // (рядом с температурой оно не помещалось: «Пасму…»).
+    char fd[16], feels[40], a[16], b[16];
+    fmtDeg(fd, sizeof(fd), ok ? cur.feels : NAN);
+    std::snprintf(feels, sizeof(feels), "%s %s", WL.feels, fd);
+    fmtDeg(a, sizeof(a), ok ? cur.tMin : NAN);
+    fmtDeg(b, sizeof(b), ok ? cur.tMax : NAN);
+    const int gs = glyphSize(r, kFontSmall);
+    const int aw = glyphTextW(r, kFontSmall, Glyph::TempMin, a, kBold);
+    const int pairW = aw + 10 + glyphTextW(r, kFontSmall, Glyph::TempMax, b, kBold);
+    const bool beside = textX + pairW <= x + w;  // «t↓-12° t↑-5°» шире — тогда своей строкой под описанием
+    auto pair = [&](int px, int py) {
+      drawGlyphText(r, kFontSmall, Glyph::TempMin, px, py, a, kBold);
+      drawGlyphText(r, kFontSmall, Glyph::TempMax, px + aw + 10, py, b, kBold);
+    };
+    const int ty = y + 6 + (iconS - lineH(r, kFontSmall) - (beside ? gs : 0)) / 2;
+    r.drawText(kFontSmall, textX, ty, feels, true);
+    if (beside) pair(textX, ty + lineH(r, kFontSmall));
+    const int dy = y + 6 + iconS + 4;
+    const Fit d(r, kFontText, desc, w, kBold);
+    r.drawText(kFontText, x, dy, d.c_str(), true, kBold);
+    if (beside) return iconS + 10 + lineH(r, kFontText) + 4;
+    pair(x, dy + lineH(r, kFontText) + 2);
+    return iconS + 10 + lineH(r, kFontText) + 2 + gs + 4;
+  }
   const int rangeW = land ? 0 : 92;
   const Fit d(r, kFontText, desc, x + w - textX - rangeW, kBold);
   char fd[16], feels[40];
@@ -447,6 +482,9 @@ void drawNoForecast(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt
   drawCentered(r, kFontSmall, x, w, y + 106 + lineH(r, kFontText) + 6, h.c_str());
 }
 
+// Ландшафт, «Погода» / сегодня: ширина левой колонки (сводка, солнце, внизу — «Обновить» и переход на «7 дней»).
+int landLeftW(const Frame& f) { return f.w * 34 / 100; }
+
 void drawWeatherToday(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T, const WxView& v, int y) {
   const int pad = calendar_config::kSidePad;
   const auto& fc = c.wx.fc;
@@ -474,30 +512,23 @@ void drawWeatherToday(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T
     drawHourTable(r, x, y, w, rowH, hs, n, fc.utcOffsetSec, c);
     return;
   }
-  // Ландшафт: слева сводка и солнце, справа график и таблица.
-  const int leftW = 330 * f.w / 800, gap = 22;
+  // Ландшафт: слева — сводка, мин/макс и солнце плотным блоком (всё по левому краю), внизу — «Обновить», время и
+  // переход на «7 дней»; справа — график и таблица во всю высоту.
+  const int leftW = landLeftW(f), gap = 18;
   const int lx = f.x + pad, rx = lx + leftW + gap, rw = f.w - 2 * pad - leftW - gap;
-  int ly = y + drawCurrent(r, lx, y, leftW, c, v, true);
-  char a[16], b[16];
-  fmtDeg(a, sizeof(a), v.haveCur ? v.cur.tMin : NAN);
-  fmtDeg(b, sizeof(b), v.haveCur ? v.cur.tMax : NAN);
-  RichItems it;
-  it.add(Glyph::TempMin, "%s", a);
-  it.add(Glyph::TempMax, "%s", b);
-  ly += drawRichRows(r, kFontSmall, lx, leftW, ly, it, kBold, false) + 6;
+  const int ly = y + drawCurrent(r, lx, y, leftW, c, v, true);
   RichItems sun;
   sunItems(sun, c, c.t.year, c.t.month, c.t.day, true);
-  ly += drawRichRows(r, kFontSmall, lx, leftW, ly, sun, kBold) + 6;
+  drawRichRows(r, kFontSmall, lx, leftW, ly, sun, kBold, false);
   if (n < 2) {
     drawNoForecast(r, rx, y, rw, c, T);
     return;
   }
-  const int graphH = 118;
+  const int graphH = 124;
   drawHourGraph(r, rx, y, rw, graphH, hs, n, fc.utcOffsetSec);
   int ty = y + graphH + 4;
   ty += drawHourTableHeader(r, rx, ty, rw);
-  const int foot = lineH(r, kFontSmall) + 6;  // справа внизу — только переход на «7 дней»; кнопка «Обновить» — слева
-  const int rowH = std::clamp((f.bottom - foot - ty) / 8, 22, 30);
+  const int rowH = std::clamp((f.bottom - 2 - ty) / 8, 22, 34);
   drawHourTable(r, rx, ty, rw, rowH, hs, n, fc.utcOffsetSec, c);
 }
 
@@ -509,9 +540,10 @@ void drawWeatherWeek(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T,
     drawNoForecast(r, x, y, w, c, T);
     return;
   }
+  const int nd = std::min<int>(fc.nDays, weather_core::kWeekDays);  // дальше 7 дней — только на экране «День»
   const auto& WL = weather_core::labels(c.lang);
   float gmin = 1e9f, gmax = -1e9f;
-  for (int i = 0; i < fc.nDays; ++i) {
+  for (int i = 0; i < nd; ++i) {
     if (!std::isnan(fc.d[i].tMin)) gmin = std::min(gmin, fc.d[i].tMin);
     if (!std::isnan(fc.d[i].tMax)) gmax = std::max(gmax, fc.d[i].tMax);
   }
@@ -526,7 +558,7 @@ void drawWeatherWeek(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T,
   const int hdrH = glyphSize(r, kFontSmall) + 6;
   const int foot = kChipH + 6;  // подвал с кнопкой «Обновить»
   (void)lhS;
-  const int rowH = std::clamp((f.bottom - foot - (y + hdrH)) / fc.nDays, f.land ? 34 : 44, 82);
+  const int rowH = std::clamp((f.bottom - foot - (y + hdrH)) / nd, f.land ? 34 : 44, 82);
   const int col1 = f.land ? 150 : 110, col4 = f.land ? 190 : 96, colW = f.land ? 100 : 0;
   {
     const int iconH = std::min(44, rowH - 6);
@@ -540,7 +572,7 @@ void drawWeatherWeek(GfxRenderer& r, const Frame& f, const Ctx& c, const Txt& T,
     y += hdrH;
     r.drawLine(x, y - 3, x + w, y - 3, 1, true);
   }
-  for (int i = 0; i < fc.nDays; ++i) {
+  for (int i = 0; i < nd; ++i) {
     const auto& d = fc.d[i];
     const int ry = y + i * rowH;
     const Ymd dt = fromEpoch(d.ts, fc.utcOffsetSec);
@@ -637,35 +669,44 @@ void drawWeather(GfxRenderer& r, const Frame& f, const State& s, const Ctx& c, H
   char hintFull[40];
   std::snprintf(hintFull, sizeof(hintFull), s.page == 0 ? "%s >" : "< %s", hint);
   const int hw = textW(r, kFontSmall, hintFull);
-  const bool splitLand = f.land && s.page == 0;
-  const int areaW = splitLand ? 330 * f.w / 800 : f.w - 2 * pad - hw - 8;
   const int fy = f.bottom - kChipH - 2;
   const int bx = f.x + pad;
   const int bw = chip(r, bx, fy, kChipH, c.wxRefreshing ? T.refreshing : T.refresh, c.wxRefreshing);
   hit.add(bx - 4, fy - 3, bw + 8, kChipH + 6, Act::Refresh);
-  const Fit u(r, kFontSmall, upd, areaW - bw - 8);
+  if (f.land && s.page == 0) {
+    // Под левой колонкой: время обновления строкой выше, ниже — «Обновить» и «7 дней >» по краям колонки.
+    const int leftW = landLeftW(f);
+    const Fit u(r, kFontSmall, upd, leftW);
+    r.drawText(kFontSmall, bx, fy - lhS - 6, u.c_str(), true);
+    r.drawText(kFontSmall, bx + leftW - hw, fy + (kChipH - lhS) / 2, hintFull, true, kBold);
+    return;
+  }
+  const Fit u(r, kFontSmall, upd, f.w - 2 * pad - hw - 8 - bw - 8);
   r.drawText(kFontSmall, bx + bw + 8, fy + (kChipH - lhS) / 2, u.c_str(), true);
-  const int hy = splitLand ? f.bottom - lhS - 2 : fy + (kChipH - lhS) / 2;
-  r.drawText(kFontSmall, f.x + f.w - pad - hw, hy, hintFull, true, kBold);
+  r.drawText(kFontSmall, f.x + f.w - pad - hw, fy + (kChipH - lhS) / 2, hintFull, true, kBold);
 }
 
 // ---- «День» -----------------------------------------------------------------------------------------------------
 
 // Карточка: рамка вокруг уже нарисованного содержимого. Заголовок карточки — верхней строкой.
+// draw = false — только посчитать высоту (раскладка экрана «День» заранее знает, сколько места займут карточки).
 struct Card {
   int x, y, w;
   int cy;  // текущая строка содержимого
+  bool draw;
 };
-Card beginCard(GfxRenderer& r, int x, int y, int w, const char* caption) {
-  Card k{x, y, w, y + 6};
-  const Fit cap(r, kFontSmall, caption, w - 24, kBold);  // длинная подпись места не вылезает за рамку
-  r.drawText(kFontSmall, x + 12, k.cy, cap.c_str(), true, kBold);
+Card beginCard(GfxRenderer& r, int x, int y, int w, const char* caption, bool draw = true) {
+  Card k{x, y, w, y + 6, draw};
+  if (draw) {
+    const Fit cap(r, kFontSmall, caption, w - 24, kBold);  // длинная подпись места не вылезает за рамку
+    r.drawText(kFontSmall, x + 12, k.cy, cap.c_str(), true, kBold);
+  }
   k.cy += lineH(r, kFontSmall) + 2;
   return k;
 }
 int endCard(GfxRenderer& r, Card& k) {
   const int h = k.cy - k.y + 6;
-  r.drawRoundedRect(k.x, k.y, k.w, h, 2, 12, true);
+  if (k.draw) r.drawRoundedRect(k.x, k.y, k.w, h, 2, 12, true);
   return h + 8;
 }
 
@@ -705,7 +746,9 @@ const SunSeries& sunSeries(const Ctx& c, int year) {
   return cache;
 }
 
-int drawSunCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T, const State& s, bool withCurve) {
+// maxH — сколько места у карточки (кривая длины дня за год ужимается или пропадает, чтобы карточки ниже не налезли
+// на кнопки дней); 0 — без кривой.
+int drawSunCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T, const State& s, int maxH) {
   const auto& CL = calendar_core::labels(c.lang);
   char cap[80];
   std::snprintf(cap, sizeof(cap), "%s  \xC2\xB7  %s", T.sun, c.wx.place.city[0] ? c.wx.place.city : "");
@@ -735,10 +778,11 @@ int drawSunCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T,
   }
   k.cy += drawRichRows(r, kFontText, x, w, k.cy, l1Items, kBold) + 2;
   if (l2Items.n) k.cy += drawRichRows(r, kFontSmall, x, w, k.cy, l2Items) + 4;
-  if (!withCurve) return endCard(r, k);
   // Длина дня за год: кривая с точкой на выбранной дате. 74 расчёта восхода/заката (двойная точность без FPU —
   // заметные миллисекунды) кэшируются: пересчёт только при смене года, места или пояса, а не на каждом листании дня.
-  const int gh = 40, gw = w - 24, gx = x + 12, gy = k.cy;
+  const int gh = std::min(40, maxH - (k.cy - y) - 16);  // 16: отступ под кривой и рамка карточки (endCard)
+  if (gh < 18) return endCard(r, k);
+  const int gw = w - 24, gx = x + 12, gy = k.cy;
   const SunSeries& ss = sunSeries(c, s.dayY);
   if (ss.hi > ss.lo) {
     auto px = [&](int i) { return gx + i * gw / (SunSeries::kPts - 1); };
@@ -751,125 +795,165 @@ int drawSunCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T,
   return endCard(r, k);
 }
 
-int drawMoonCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T, const State& s) {
-  Card k = beginCard(r, x, y, w, T.moon);
+int drawMoonCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T, const State& s, bool draw = true) {
+  Card k = beginCard(r, x, y, w, T.moon, draw);
   const double jd = moon_phase::julianFromLocal(s.dayY, s.dayM, s.dayD, 12, 0, c.t.utcOffsetMin);
   const auto mi = moon_phase::at(jd);
   const auto nf = moon_phase::nextFullMoon(jd, c.t.utcOffsetMin);
   const auto nn = moon_phase::nextNewMoon(jd, c.t.utcOffsetMin);
   const int rad = 27;
-  drawMoonPhase(r, mi.fraction, x + 16 + rad, k.cy + rad + 2, rad);
   const int tx = x + 16 + 2 * rad + 14, tw = w - (tx - x) - 10;
-  char l2[64], l3[64];
-  std::snprintf(l2, sizeof(l2), T.lit, static_cast<int>(std::lround(mi.illum * 100)));
-  std::snprintf(l3, sizeof(l3), T.lunarDay, mi.lunarDay);
-  const Fit name(r, kFontText, moon_phase::phaseName(c.lang, mi.phaseIdx), tw, kBold);
   int ty = k.cy + 2;
-  r.drawText(kFontText, tx, ty, name.c_str(), true, kBold);
-  ty += lineH(r, kFontText);
-  r.drawText(kFontSmall, tx, ty, l2, true);
-  ty += lineH(r, kFontSmall);
-  r.drawText(kFontSmall, tx, ty, l3, true);
-  k.cy += std::max(2 * rad + 8, ty + lineH(r, kFontSmall) - k.cy + 4);
+  if (draw) {
+    drawMoonPhase(r, mi.fraction, x + 16 + rad, k.cy + rad + 2, rad);
+    char l2[64], l3[64];
+    std::snprintf(l2, sizeof(l2), T.lit, static_cast<int>(std::lround(mi.illum * 100)));
+    std::snprintf(l3, sizeof(l3), T.lunarDay, mi.lunarDay);
+    const Fit name(r, kFontText, moon_phase::phaseName(c.lang, mi.phaseIdx), tw, kBold);
+    r.drawText(kFontText, tx, ty, name.c_str(), true, kBold);
+    r.drawText(kFontSmall, tx, ty + lineH(r, kFontText), l2, true);
+    r.drawText(kFontSmall, tx, ty + lineH(r, kFontText) + lineH(r, kFontSmall), l3, true);
+  }
+  ty += lineH(r, kFontText) + 2 * lineH(r, kFontSmall);
+  k.cy += std::max(2 * rad + 8, ty - k.cy + 4);
+  // Ближайшие полнолуние и новолуние — одной строкой; не влезает (длинные месяцы: «30 июн · 14 июл») — даты цифрами;
+  // и так не влезает (узкая колонка ландшафта) — двумя строками.
   char e1[48], e2[48], both[120], mo1[16], mo2[16];
   abbrTo(mo1, sizeof(mo1), calendar_core::monthNameGenitive(c.lang, nf.month), 3);
   abbrTo(mo2, sizeof(mo2), calendar_core::monthNameGenitive(c.lang, nn.month), 3);
   std::snprintf(e1, sizeof(e1), "%s %u %s", T.nextFull, nf.day, mo1);
   std::snprintf(e2, sizeof(e2), "%s %u %s", T.nextNew, nn.day, mo2);
-  std::snprintf(both, sizeof(both), "%s  \xC2\xB7  %s", e1, e2);
+  std::snprintf(both, sizeof(both), "%s \xC2\xB7 %s", e1, e2);
+  if (textW(r, kFontSmall, both) > w - 16) {
+    std::snprintf(e1, sizeof(e1), "%s %02u.%02u", T.nextFull, nf.day, nf.month);
+    std::snprintf(e2, sizeof(e2), "%s %02u.%02u", T.nextNew, nn.day, nn.month);
+    std::snprintf(both, sizeof(both), "%s \xC2\xB7 %s", e1, e2);
+  }
+  if (textW(r, kFontSmall, both) > w - 16) {  // узкая колонка ландшафта: «Полн. 26.09 · нов. 10.10»
+    std::snprintf(both, sizeof(both), "%s %02u.%02u \xC2\xB7 %s %02u.%02u", T.fullShort, nf.day, nf.month, T.newShort,
+                  nn.day, nn.month);
+  }
   if (textW(r, kFontSmall, both) <= w - 16) {
-    drawCentered(r, kFontSmall, x, w, k.cy, both);
+    if (draw) drawCentered(r, kFontSmall, x, w, k.cy, both);
     k.cy += lineH(r, kFontSmall) + 4;
-  } else {  // узкая колонка: два события — две строки
-    drawCentered(r, kFontSmall, x, w, k.cy, e1);
-    drawCentered(r, kFontSmall, x, w, k.cy + lineH(r, kFontSmall), e2);
+  } else {
+    if (draw) {
+      drawCentered(r, kFontSmall, x, w, k.cy, e1);
+      drawCentered(r, kFontSmall, x, w, k.cy + lineH(r, kFontSmall), e2);
+    }
     k.cy += 2 * lineH(r, kFontSmall) + 4;
   }
   return endCard(r, k);
 }
 
-int drawWeatherCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T, const State& s, HitMap& hit) {
+// «год / года / лет».
+const char* yearsWord(Lang lang, int n) {
+  if (lang == Lang::Ru) {
+    const int a = n % 100, b = n % 10;
+    return (a >= 11 && a <= 14) ? "лет" : b == 1 ? "год" : (b >= 2 && b <= 4) ? "года" : "лет";
+  }
+  if (lang == Lang::De) return n == 1 ? "Jahr" : "Jahren";
+  return n == 1 ? "year" : "years";
+}
+
+// Погода выбранного дня: прогноз (до 16 дней), прошедший — архив или сохранённый прогноз, дальше прогноза — норма.
+// draw = false — только высота (для раскладки).
+int drawWeatherCard(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T, const State& s, HitMap& hit,
+                    bool draw = true) {
   const WxView v = wxView(c);
   const int32_t target = calendar_core::daysFromCivil(s.dayY, s.dayM, s.dayD);
   const int32_t today = calendar_core::daysFromCivil(c.t.year, c.t.month, c.t.day);
   const bool past = target < today;
-  const weather_core::HistDay* h = past ? c.hist.find(packDate(s.dayY, s.dayM, s.dayD), c.wx.place.lat, c.wx.place.lon) : nullptr;
-  // Прошедший день — в заголовке карточки источник: «Архив Open-Meteo» или «Сохранённый прогноз» (записан устройством).
-  const char* head = !h ? T.weather : h->src == weather_core::HistSource::Archive ? T.histArchive : T.histRecorded;
-  char cap[96];
-  std::snprintf(cap, sizeof(cap), "%s  \xC2\xB7  %s", head, c.wx.place.city[0] ? c.wx.place.city : "");
-  Card k = beginCard(r, x, y, w, cap);
   const auto& fc = c.wx.fc;
   int idx = -1;
-  if (v.fcOk) {
+  if (v.fcOk && !past) {
     for (int i = 0; i < fc.nDays; ++i) {
       const Ymd dt = fromEpoch(fc.d[i].ts, fc.utcOffsetSec);
       if (calendar_core::daysFromCivil(dt.y, dt.m, dt.d) == target) idx = i;
     }
   }
-  if (past) {  // прошедший день — история: архив Open-Meteo или сохранённый устройством прогноз
-    if (!h) {
-      const char* msg = c.histState == HistState::Waiting  ? T.histLoading
-                        : c.histState == HistState::Failed ? T.histFailed
-                                                           : T.histNone;
+  const weather_core::HistDay* h =
+      idx >= 0 ? nullptr : c.hist.find(packDate(s.dayY, s.dayM, s.dayD), c.wx.place.lat, c.wx.place.lon);
+  // Прошедшему дню — только архив и сохранённый прогноз; будущему — только норма.
+  if (h && past == (h->src == weather_core::HistSource::Climate)) h = nullptr;
+  const bool climate = h && h->src == weather_core::HistSource::Climate;
+  // В заголовке карточки — откуда данные.
+  const char* head = !h ? (idx >= weather_core::kWeekDays ? T.farFc : T.weather)
+                     : climate ? T.climTitle
+                     : h->src == weather_core::HistSource::Archive ? T.histArchive
+                                                                   : T.histRecorded;
+  char cap[96];
+  std::snprintf(cap, sizeof(cap), "%s  \xC2\xB7  %s", head, c.wx.place.city[0] ? c.wx.place.city : "");
+  Card k = beginCard(r, x, y, w, cap, draw);
+  const auto& WL = weather_core::labels(c.lang);
+
+  if (idx < 0 && !h) {  // данных нет: загружается, не удалось или прогноза на этот день нет
+    const char* msg = c.histState == HistState::Waiting ? (past ? T.histLoading : T.climLoading)
+                      : c.histState == HistState::Failed ? T.histFailed
+                      : past                             ? T.histNone
+                                                         : T.fcOnly;
+    if (draw) {
       const Fit t(r, kFontSmall, msg, w - 16);
       drawCentered(r, kFontSmall, x, w, k.cy + 4, t.c_str());
-      k.cy += lineH(r, kFontSmall) + 10;
-      return endCard(r, k);
     }
-    const auto& WL = weather_core::labels(c.lang);
-    const int iconS = 46;
-    drawWeatherIcon(r, h->code >= 0 ? weather_core::iconFor(h->code, true) : Icon::Unknown, x + 12, k.cy + 2, iconS);
-    const int tx = x + 12 + iconS + 12, tw = w - (tx - x) - 10;
-    const char* desc = h->code >= 0 ? weather_core::description(c.lang, h->code) : WL.noData;
+    k.cy += lineH(r, kFontSmall) + 10;
+    return endCard(r, k);
+  }
+
+  float tMin, tMax, mm;
+  int code;
+  if (idx >= 0) {
+    tMin = fc.d[idx].tMin;
+    tMax = fc.d[idx].tMax;
+    mm = fc.d[idx].precipMm;
+    code = fc.d[idx].code;
+  } else {
+    tMin = h->tMin;
+    tMax = h->tMax;
+    mm = h->mm;
+    code = climate ? -1 : h->code;
+  }
+  const int iconS = 46;
+  if (draw) {
+    char a[16], b[16], mmS[16], pr[32], line[64];
+    fmtDeg(a, sizeof(a), tMin);
+    fmtDeg(b, sizeof(b), tMax);
+    fmtMm(mmS, sizeof(mmS), mm, c.lang);
+    if (climate && h->wetPct >= 0) {
+      std::snprintf(pr, sizeof(pr), "%s %s (%d %%)", mmS, WL.mmUnit, h->wetPct);
+    } else {
+      std::snprintf(pr, sizeof(pr), "%s %s", mmS, WL.mmUnit);
+    }
+    int tx = x + 12;
+    const char* desc;
+    if (climate) {  // у нормы нет «погоды дня» — вместо значка и описания: «в среднем за 10 лет»
+      std::snprintf(line, sizeof(line), T.climDesc, h->years, yearsWord(c.lang, h->years));
+      desc = line;
+    } else {
+      drawWeatherIcon(r, code >= 0 ? weather_core::iconFor(code, true) : Icon::Unknown, x + 12, k.cy + 2, iconS);
+      tx += iconS + 12;
+      desc = code >= 0 ? weather_core::description(c.lang, code) : WL.noData;
+    }
+    const int tw = w - (tx - x) - 10;
     const Fit dn(r, kFontText, desc, tw, kBold);
     r.drawText(kFontText, tx, k.cy + 2, dn.c_str(), true, kBold);
-    char a[16], b[16], mm[16], pr[24];
-    fmtDeg(a, sizeof(a), h->tMin);
-    fmtDeg(b, sizeof(b), h->tMax);
-    fmtMm(mm, sizeof(mm), h->mm, c.lang);
-    std::snprintf(pr, sizeof(pr), "%s %s", mm, WL.mmUnit);
-    RichItems ri;  // та же строка, что и у прогноза дня: t↓ t↑ осадки
+    RichItems ri;  // t↓ t↑ осадки
     ri.add(Glyph::TempMin, "%s", a);
     ri.add(Glyph::TempMax, "%s", b);
     ri.add(Glyph::Drop, "%s", pr);
     drawRichRows(r, kFontSmall, tx, tw, k.cy + 2 + lineH(r, kFontText), ri, kRegular, false);
-    k.cy += std::max(iconS + 8, lineH(r, kFontText) + glyphSize(r, kFontSmall) + 8);
-    return endCard(r, k);
   }
-  if (idx < 0) {
-    const Fit t(r, kFontSmall, T.fcOnly, w - 16);
-    drawCentered(r, kFontSmall, x, w, k.cy + 4, t.c_str());
-    k.cy += lineH(r, kFontSmall) + 10;
-    return endCard(r, k);
-  }
-  const auto& d = fc.d[idx];
-  const auto& WL = weather_core::labels(c.lang);
-  const int iconS = 46;
-  drawWeatherIcon(r, d.code >= 0 ? weather_core::iconFor(d.code, true) : Icon::Unknown, x + 12, k.cy + 2, iconS);
-  const int tx = x + 12 + iconS + 12, tw = w - (tx - x) - 10;
-  const char* desc = d.code >= 0 ? weather_core::description(c.lang, d.code) : WL.noData;
-  const Fit dn(r, kFontText, desc, tw, kBold);
-  r.drawText(kFontText, tx, k.cy + 2, dn.c_str(), true, kBold);
-  char a[16], b[16], mm[16], pr[24];
-  fmtDeg(a, sizeof(a), d.tMin);
-  fmtDeg(b, sizeof(b), d.tMax);
-  fmtMm(mm, sizeof(mm), d.precipMm, c.lang);
-  std::snprintf(pr, sizeof(pr), "%s %s", mm, WL.mmUnit);
-  RichItems ri;
-  ri.add(Glyph::TempMin, "%s", a);
-  ri.add(Glyph::TempMax, "%s", b);
-  ri.add(Glyph::Drop, "%s", pr);
-  drawRichRows(r, kFontSmall, tx, tw, k.cy + 2 + lineH(r, kFontText), ri, kRegular, false);
   k.cy += std::max(iconS + 8, lineH(r, kFontText) + glyphSize(r, kFontSmall) + 8);
   const int ch = endCard(r, k);
-  hit.add(x, y, w, ch - 8, Act::OpenWeek);
+  if (draw && idx >= 0 && idx < weather_core::kWeekDays) hit.add(x, y, w, ch - 8, Act::OpenWeek);  // день есть на «7 днях»
   return ch;
 }
 
 // Фиксированные «слоты» заголовка дня — чтобы ничего не «прыгало» при смене даты: день недели, дата, «через N дн.»
 // (всегда своей строкой под датой), чипсы, строка праздника (высота зарезервирована, даже когда пустая).
-int drawDayTitle(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T, const State& s) {
+// compact — ландшафт: отступы меньше, чтобы карточки под заголовком не упирались в кнопки дней.
+int drawDayTitle(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T, const State& s, bool compact = false) {
+  const int gap = compact ? 3 : 8;
   const int lhT = lineH(r, kFontText), lhS = lineH(r, kFontSmall);
   drawCentered(r, kFontText, x, w, y, calendar_core::weekdayName(c.lang, calendar_core::weekday(s.dayY, s.dayM, s.dayD)), true, kBold);
   y += lhT + 2;
@@ -889,7 +973,7 @@ int drawDayTitle(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T
   const int pillH = lhS + 8, pw = textW(r, kFontSmall, rel, kBold) + 28;
   r.drawRoundedRect(x + (w - pw) / 2, y, pw, pillH, 2, pillH / 2, true);
   r.drawText(kFontSmall, x + (w - pw) / 2 + 14, y + 4, rel, true, kBold);
-  y += pillH + 8;
+  y += pillH + gap;
 
   const auto& CL = calendar_core::labels(c.lang);
   char chips[96];
@@ -897,19 +981,19 @@ int drawDayTitle(GfxRenderer& r, int x, int y, int w, const Ctx& c, const Txt& T
   std::snprintf(chips, sizeof(chips), "%s %u  \xC2\xB7  %s %u / %u", CL.week, calendar_core::isoWeek(s.dayY, s.dayM, s.dayD), CL.day, doy, diy);
   const Fit tc(r, kFontSmall, chips, w - 8);
   drawCentered(r, kFontSmall, x, w, y, tc.c_str());
-  y += lhS + 8;
+  y += lhS + gap;
 
   if (calendar_config::kHolidaysEnabled) {
     const auto di = dayInfo(c, s.dayY, s.dayM, s.dayD);
     const char* lb = holiday_core::label(c.lang, di);
-    const int slotH = lhT + 12;
+    const int slotH = lhT + (compact ? 6 : 12);
     if (lb[0]) {
       if (di.off) r.fillRectDither(x + 2, y + 2, w - 4, slotH - 4, Color::LightGray);
       r.drawRoundedRect(x, y, w, slotH, 2, 10, true);
       const Fit t(r, kFontText, lb, w - 20, kBold);
       drawCentered(r, kFontText, x, w, y + (slotH - lhT) / 2, t.c_str(), true, kBold);
     }
-    y += slotH + 8;
+    y += slotH + gap;
   }
   return y;
 }
@@ -927,14 +1011,18 @@ void drawDay(GfxRenderer& r, const Frame& f, const State& s, const Ctx& c, HitMa
   if (!f.land) {
     const int x = f.x + pad, w = f.w - 2 * pad;
     y = drawDayTitle(r, x, y, w, c, T, s);
-    y += drawSunCard(r, x, y, w, c, T, s, /*withCurve=*/true);
+    // Сначала — сколько займут луна и погода (у них высота бывает разной: события луны в две строки, карточка погоды с
+    // данными или строкой-сообщением); солнцу — остаток, чтобы ничего не налезло на кнопки дней внизу.
+    const int moonH = drawMoonCard(r, x, 0, w, c, T, s, false);
+    const int wxH = drawWeatherCard(r, x, 0, w, c, T, s, hit, false);
+    y += drawSunCard(r, x, y, w, c, T, s, navY - 4 - y - moonH - wxH);
     y += drawMoonCard(r, x, y, w, c, T, s);
     y += drawWeatherCard(r, x, y, w, c, T, s, hit);
   } else {
     const int gap = 22, colW = (f.w - 2 * pad - gap) / 2;
     const int lx = f.x + pad, rx = lx + colW + gap;
-    int ly = drawDayTitle(r, lx, y, colW, c, T, s);
-    drawSunCard(r, lx, ly, colW, c, T, s, /*withCurve=*/false);
+    int ly = drawDayTitle(r, lx, y, colW, c, T, s, true);
+    drawSunCard(r, lx, ly, colW, c, T, s, 0);
     int ry = drawMoonCard(r, rx, y, colW, c, T, s);
     drawWeatherCard(r, rx, y + ry, colW, c, T, s, hit);
   }

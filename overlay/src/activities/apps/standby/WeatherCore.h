@@ -66,9 +66,11 @@ struct Weather {
   Provider provider = Provider::OpenMeteo;
 };
 
-// Прогноз для подробных экранов: ближайшие 24 часа и 7 дней (сегодня + 6). Отсутствующие поля — NaN / -1.
+// Прогноз для подробных экранов: ближайшие 24 часа и до 16 дней (Open-Meteo даёт 16, MET Norway — ≈ 10; на экране
+// «7 дней» — первые 7, остальные — на экране «День»). Отсутствующие поля — NaN / -1.
 constexpr int kFcHours = 24;
-constexpr int kFcDays = 7;
+constexpr int kFcDays = 16;
+constexpr int kWeekDays = 7;
 
 struct FcHour {
   uint32_t ts = 0;  // Unix, начало часа
@@ -193,7 +195,8 @@ bool parseCoords(const char* text, double& lat, double& lon);
 // ---- История погоды: прошедшие дни на экране «День» ----------------------------------------------------------------
 // Источники: архив Open-Meteo (archive-api.open-meteo.com, данные до вчерашнего дня) и собственная запись устройства —
 // последний полученный прогноз на каждый день (виден, даже если архив из вашей сети недоступен).
-enum class HistSource : uint8_t { None = 0, Archive = 1, Recorded = 2 };
+// Climate — климатическая норма для дней дальше прогноза: среднее за kClimateYears лет по архиву (окно ±3 дня).
+enum class HistSource : uint8_t { None = 0, Archive = 1, Recorded = 2, Climate = 3 };
 struct HistDay {
   int32_t date = 0;  // calendar_core: packDate-подобно, год*10000 + месяц*100 + день (местная дата места)
   float lat = NAN, lon = NAN;  // для какого места
@@ -201,14 +204,16 @@ struct HistDay {
   int16_t code = -1;
   HistSource src = HistSource::None;
   uint32_t savedAt = 0;  // когда записано (вытесняется самое давнее)
+  uint8_t years = 0;     // Climate: за сколько лет среднее
+  int8_t wetPct = -1;    // Climate: доля дней с осадками ≥ 1 мм, %
 };
 constexpr int kHistMax = 48;
 struct HistStore {
   HistDay d[kHistMax];
   int n = 0;
-  // Запись для даты и места (≈ 5 км); при наличии обеих — архивная. nullptr — нет.
+  // Запись для даты и места (≈ 5 км); из нескольких — самая точная: архив, потом запись устройства, потом норма.
   const HistDay* find(int32_t date, double lat, double lon) const;
-  // Добавить или заменить (архив не заменяется записью устройства).
+  // Добавить или заменить; менее точная запись (норма, запись устройства) архив не заменяет.
   void put(const HistDay& h);
 };
 std::string serializeHistory(const HistStore& h);
@@ -217,6 +222,31 @@ bool parseHistory(const char* json, size_t len, HistStore& out);  // при fals
 int buildArchiveUrl(double lat, double lon, int32_t from, int32_t to, char* buf, size_t size, bool https = true);
 // Ответ архива → дни (src = Archive). Число дней или -1. Дни без температуры пропускаются.
 int parseArchive(const char* json, size_t len, double lat, double lon, uint32_t nowEpoch, HistDay* out, int maxOut);
+
+// Климатическая норма: копит дни архива за прошлые годы (окно вокруг того же числа) и считает среднее для 7 дней
+// вокруг нужной даты (у каждого — своё окно ±3 дня). Чистая логика — host-тест.
+class ClimateAcc {
+ public:
+  static constexpr int kSpan = 3;               // окно нормы: ±3 дня
+  static constexpr int kFetchSpan = 2 * kSpan;  // сколько дней вокруг числа брать из каждого года (для 7 дат)
+  // date — нужная дата (год*10000 + месяц*100 + день).
+  explicit ClimateAcc(int32_t date);
+  // Даты [from, to] одного прошлого года — вокруг того же числа (29 февраля в невисокосный год — 28-е).
+  void rangeFor(int year, int32_t& from, int32_t& to) const;
+  // Дни архива за год year (из rangeFor).
+  void add(int year, const HistDay* days, int n);
+  // Нормы на даты date−3 … date+3 (years — сколько лет пришло; меньше minYears — ничего). Число записей.
+  int result(double lat, double lon, uint32_t nowEpoch, int minYears, HistDay* out, int maxOut) const;
+
+ private:
+  int32_t date_;
+  unsigned m_, d_;
+  struct Sum {
+    float tMax = 0, tMin = 0, mm = 0;
+    int nMax = 0, nMin = 0, nMm = 0, wet = 0;
+  } sum_[2 * kSpan + 1];
+  int years_ = 0;
+};
 
 // copyUtf8 (объявлена выше): обрезка UTF-8 до dstSize-1 байт по границе символа + завершающий ноль.
 

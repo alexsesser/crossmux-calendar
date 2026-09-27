@@ -58,11 +58,13 @@ class WeatherClient {
   void pickSaved(int i);    // сохранённое место → ручное (и первым в списке)
   void removeSaved(int i);  // убрать из сохранённых
 
-  // ---- История погоды (экран «День», прошедшие даты; даты — год*10000 + месяц*100 + день).
+  // ---- История и норма погоды (экран «День»; даты — год*10000 + месяц*100 + день).
   enum class Hist : uint8_t { None, Waiting, Failed };
-  // Смотрят прошедший день date: архивной записи нет — загрузить из архива (сразу ±3 дня, чтобы листание соседних
-  // дней не требовало новых запросов). today — сегодняшняя дата.
-  void wantHistory(int32_t date, int32_t today);
+  // Смотрят день date. Прошедший без архивной записи — загрузить из архива (сразу ±3 дня, чтобы листание соседних дней
+  // не требовало новых запросов). Будущий дальше прогноза — посчитать климатическую норму (kClimateYears лет архива,
+  // тоже сразу на 7 дней вокруг). today — сегодняшняя дата.
+  void wantHistory(int32_t date, int32_t today, uint32_t nowEpoch);
+  bool forecastCovers(int32_t date, uint32_t nowEpoch) const;  // есть свежий прогноз на этот день
   Hist historyState(int32_t date) const;
   const weather_core::HistStore& history() const { return hist_; }
 

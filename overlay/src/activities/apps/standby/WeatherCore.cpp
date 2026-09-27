@@ -181,7 +181,7 @@ int buildForecastUrl(double lat, double lon, char* buf, size_t size, bool https,
                        "&hourly=temperature_2m,weather_code,precipitation_probability,wind_speed_10m,is_day"
                        "&forecast_hours=24"
                        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,"
-                       "precipitation_probability_max,wind_speed_10m_max&forecast_days=7"
+                       "precipitation_probability_max,wind_speed_10m_max&forecast_days=16"
                        "&timezone=auto&timeformat=unixtime&wind_speed_unit=ms",
                        where);
 }
@@ -589,7 +589,8 @@ bool parseMetNo(const char* json, size_t len, uint32_t nowEpoch, double lat, dou
   w.provider = Provider::MetNo;
 
   for (int i = 0; i < kFcDays; ++i) {
-    if (!days[i].any) break;
+    // Хвост ряда — одно мгновенное значение без погоды за период: такой «день» не показываем.
+    if (!days[i].any || days[i].code < 0) break;
     FcDay& d = f.d[f.nDays++];
     d.ts = static_cast<uint32_t>(static_cast<int64_t>(today + i) * 86400 - off);
     d.tMin = days[i].tMin;
@@ -899,12 +900,16 @@ bool parseSettings(const char* json, size_t len, Settings& out) {
 
 // ---- История -------------------------------------------------------------------
 
+namespace {
+int rank(HistSource s) { return s == HistSource::Archive ? 3 : s == HistSource::Recorded ? 2 : s == HistSource::Climate ? 1 : 0; }
+}  // namespace
+
 const HistDay* HistStore::find(int32_t date, double lat, double lon) const {
   const HistDay* best = nullptr;
   for (int i = 0; i < n; ++i) {
     const HistDay& h = d[i];
     if (h.date != date || !samePlace(h.lat, h.lon, lat, lon)) continue;
-    if (!best || (h.src == HistSource::Archive && best->src != HistSource::Archive)) best = &h;
+    if (!best || rank(h.src) > rank(best->src)) best = &h;
   }
   return best;
 }
@@ -913,7 +918,7 @@ void HistStore::put(const HistDay& h) {
   int slot = -1;
   for (int i = 0; i < n; ++i) {
     if (d[i].date == h.date && samePlace(d[i].lat, d[i].lon, h.lat, h.lon)) {
-      if (d[i].src == HistSource::Archive && h.src == HistSource::Recorded) return;  // архив точнее
+      if (rank(h.src) < rank(d[i].src)) return;  // менее точное не заменяет более точное
       slot = i;
       break;
     }
@@ -946,6 +951,8 @@ std::string serializeHistory(const HistStore& hs) {
     put("mm", h.mm);
     put("w", h.wind);
     if (h.code >= 0) o["c"] = h.code;
+    if (h.years) o["yr"] = h.years;
+    if (h.wetPct >= 0) o["wp"] = h.wetPct;
     o["s"] = static_cast<int>(h.src);
     o["at"] = h.savedAt;
   }
@@ -963,7 +970,7 @@ bool parseHistory(const char* json, size_t len, HistStore& out) {
     HistDay h;
     h.date = o["dt"] | 0;
     const int src = o["s"] | 0;
-    if (h.date <= 0 || src < 1 || src > 2) continue;
+    if (h.date <= 0 || src < 1 || src > 3) continue;
     h.lat = numberOrNan(o["la"]);
     h.lon = numberOrNan(o["lo"]);
     h.tMax = numberOrNan(o["mx"]);
@@ -973,6 +980,8 @@ bool parseHistory(const char* json, size_t len, HistStore& out) {
     h.code = o["c"].is<int>() ? static_cast<int16_t>(o["c"].as<int>()) : -1;
     h.src = static_cast<HistSource>(src);
     h.savedAt = o["at"] | 0u;
+    h.years = static_cast<uint8_t>(o["yr"] | 0);
+    h.wetPct = o["wp"].is<int>() ? static_cast<int8_t>(o["wp"].as<int>()) : -1;
     hs.d[hs.n++] = h;
   }
   out = hs;
@@ -988,6 +997,83 @@ int buildArchiveUrl(double lat, double lon, int32_t from, int32_t to, char* buf,
                        https ? "https" : "http", lat, lon, static_cast<int>(from / 10000), static_cast<int>(from / 100 % 100),
                        static_cast<int>(from % 100), static_cast<int>(to / 10000), static_cast<int>(to / 100 % 100),
                        static_cast<int>(to % 100));
+}
+
+namespace {
+int32_t packYmd(int y, unsigned m, unsigned d) { return y * 10000 + static_cast<int32_t>(m) * 100 + static_cast<int32_t>(d); }
+int32_t dayIndex(int32_t packed) {
+  return calendar_core::daysFromCivil(packed / 10000, static_cast<unsigned>(packed / 100 % 100), static_cast<unsigned>(packed % 100));
+}
+int32_t fromIndex(int32_t idx) {
+  int y;
+  unsigned m, d;
+  calendar_core::civilFromDays(idx, y, m, d);
+  return packYmd(y, m, d);
+}
+// То же число в году year (29 февраля в невисокосный — 28-е).
+int32_t sameDayIn(int year, unsigned m, unsigned d) {
+  const unsigned dim = calendar_core::daysInMonth(year, m);
+  return calendar_core::daysFromCivil(year, m, d > dim ? dim : d);
+}
+}  // namespace
+
+ClimateAcc::ClimateAcc(int32_t date)
+    : date_(date), m_(static_cast<unsigned>(date / 100 % 100)), d_(static_cast<unsigned>(date % 100)) {}
+
+void ClimateAcc::rangeFor(int year, int32_t& from, int32_t& to) const {
+  const int32_t c = sameDayIn(year, m_, d_);
+  from = fromIndex(c - kFetchSpan);
+  to = fromIndex(c + kFetchSpan);
+}
+
+void ClimateAcc::add(int year, const HistDay* days, int n) {
+  const int32_t c = sameDayIn(year, m_, d_);
+  bool any = false;
+  for (int i = 0; i < n; ++i) {
+    const int delta = static_cast<int>(dayIndex(days[i].date) - c);
+    for (int o = -kSpan; o <= kSpan; ++o) {
+      if (delta < o - kSpan || delta > o + kSpan) continue;  // этот день — в окне нормы на дату date+o
+      Sum& s = sum_[o + kSpan];
+      if (!std::isnan(days[i].tMax)) {
+        s.tMax += days[i].tMax;
+        ++s.nMax;
+      }
+      if (!std::isnan(days[i].tMin)) {
+        s.tMin += days[i].tMin;
+        ++s.nMin;
+      }
+      if (!std::isnan(days[i].mm)) {
+        s.mm += days[i].mm;
+        ++s.nMm;
+        if (days[i].mm >= 1.0f) ++s.wet;
+      }
+      any = true;
+    }
+  }
+  if (any) ++years_;
+}
+
+int ClimateAcc::result(double lat, double lon, uint32_t nowEpoch, int minYears, HistDay* out, int maxOut) const {
+  if (years_ < minYears) return 0;
+  const int32_t c = dayIndex(date_);
+  int n = 0;
+  for (int o = -kSpan; o <= kSpan && n < maxOut; ++o) {
+    const Sum& s = sum_[o + kSpan];
+    if (!s.nMax && !s.nMin) continue;
+    HistDay h;
+    h.date = fromIndex(c + o);
+    h.lat = static_cast<float>(lat);
+    h.lon = static_cast<float>(lon);
+    h.tMax = s.nMax ? s.tMax / s.nMax : NAN;
+    h.tMin = s.nMin ? s.tMin / s.nMin : NAN;
+    h.mm = s.nMm ? s.mm / s.nMm : NAN;
+    h.wetPct = s.nMm ? static_cast<int8_t>(s.wet * 100 / s.nMm) : -1;
+    h.years = static_cast<uint8_t>(years_);
+    h.src = HistSource::Climate;
+    h.savedAt = nowEpoch;
+    out[n++] = h;
+  }
+  return n;
 }
 
 int parseArchive(const char* json, size_t len, double lat, double lon, uint32_t nowEpoch, HistDay* out, int maxOut) {

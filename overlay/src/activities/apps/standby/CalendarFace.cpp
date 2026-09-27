@@ -850,7 +850,7 @@ StandbyFace::TickResult CalendarFace::tick() {
   // «День» с прошедшей датой — архив погоды для неё (клиент сам решит, нужен ли запрос).
   if (st_.screen == cal_detail::Screen::Day) {
     weather_.wantHistory(cal_detail::packDate(st_.dayY, st_.dayM, st_.dayD),
-                         cal_detail::packDate(snap_.year, snap_.month, snap_.day));
+                         cal_detail::packDate(snap_.year, snap_.month, snap_.day), snap_.epoch);
   }
 
   // Вложенный экран закрывается сам после kDetailAutoCloseSec без ввода. «Место» с незавершённым поиском — ждёт ответа.

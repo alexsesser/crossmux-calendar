@@ -246,7 +246,7 @@ int main(int argc, char** argv) {
     for (int i = 0; i < f.nHours; ++i) CHECK(!std::isnan(f.h[i].temp) && f.h[i].code >= 0 && !std::isnan(f.h[i].mm) && f.h[i].prob == -1);
     // 23:00 по Москве (20:00 UTC) — ночь; 10:00 по Москве завтра (07:00 UTC) — день.
     CHECK(!f.h[7].isDay && f.h[18].isDay);
-    CHECK(f.nDays == kFcDays);
+    CHECK(f.nDays >= kWeekDays && f.nDays <= kFcDays);  // MET: ≈ 10 дней; хвост без погоды за период отброшен
     for (int i = 0; i < f.nDays; ++i) {
       CHECK(static_cast<int64_t>(f.d[i].ts) + off == static_cast<int64_t>(calendar_core::daysFromCivil(2026, 9, 26) + i) * 86400);
       CHECK(!std::isnan(f.d[i].tMin) && !std::isnan(f.d[i].tMax) && f.d[i].tMin <= f.d[i].tMax);
@@ -379,6 +379,57 @@ int main(int argc, char** argv) {
     char u[400];
     CHECK(buildArchiveUrl(55.7558, 37.6173, 20260919, 20260925, u, sizeof(u)) > 0 &&
           std::string(u).find("https://archive-api.open-meteo.com/v1/archive?latitude=55.76&longitude=37.62&start_date=2026-09-19&end_date=2026-09-25") == 0);
+  }
+  // --- Климатическая норма: окна по годам, среднее, доля дней с осадками ---
+  {
+    ClimateAcc acc(20261020);
+    int32_t from = 0, to = 0;
+    acc.rangeFor(2025, from, to);
+    CHECK(from == 20251014 && to == 20251026);
+    ClimateAcc feb(20280229);
+    feb.rangeFor(2025, from, to);  // 29 февраля в невисокосный год — вокруг 28-го
+    CHECK(from == 20250222 && to == 20250306);
+    // Три года: каждый день tMax = 10 + год-2020, tMin = tMax − 8; осадки 2 мм через день.
+    for (int y = 2023; y <= 2025; ++y) {
+      HistDay d[13];
+      acc.rangeFor(y, from, to);
+      const int32_t c0 = calendar_core::daysFromCivil(y, 10, 14);
+      for (int i = 0; i < 13; ++i) {
+        int yy;
+        unsigned mm, dd;
+        calendar_core::civilFromDays(c0 + i, yy, mm, dd);
+        d[i].date = yy * 10000 + static_cast<int32_t>(mm) * 100 + static_cast<int32_t>(dd);
+        d[i].tMax = 10.0f + (y - 2020);
+        d[i].tMin = d[i].tMax - 8;
+        d[i].mm = (i % 2) ? 2.0f : 0.0f;
+      }
+      acc.add(y, d, 13);
+    }
+    HistDay out[7];
+    CHECK(acc.result(55.75, 37.62, 99, 4, out, 7) == 0);  // меньше 4 лет — не считаем
+    const int n = acc.result(55.75, 37.62, 99, 3, out, 7);
+    CHECK(n == 7 && out[0].date == 20261017 && out[3].date == 20261020 && out[6].date == 20261023);
+    CHECK(std::fabs(out[3].tMax - 14.0f) < 1e-4 && std::fabs(out[3].tMin - 6.0f) < 1e-4);  // (13+14+15)/3
+    CHECK(out[3].years == 3 && out[3].src == HistSource::Climate && out[3].wetPct >= 40 && out[3].wetPct <= 60);
+    CHECK(std::fabs(out[3].mm - 1.0f) < 0.2f);
+    // Норма в хранилище: архив и запись устройства её вытесняют, она их — нет.
+    HistStore hs;
+    hs.put(out[3]);
+    HistDay rec = out[3];
+    rec.src = HistSource::Recorded;
+    rec.tMax = 1;
+    hs.put(rec);
+    CHECK(hs.find(20261020, 55.75, 37.62)->src == HistSource::Recorded);
+    hs.put(out[3]);
+    CHECK(hs.find(20261020, 55.75, 37.62)->src == HistSource::Recorded && hs.n == 1);
+    const std::string js = serializeHistory(hs);
+    HistStore back;
+    CHECK(parseHistory(js.data(), js.size(), back) && back.n == 1);
+    HistStore cl;
+    cl.put(out[0]);
+    const std::string cj = serializeHistory(cl);
+    CHECK(parseHistory(cj.data(), cj.size(), back) && back.d[0].src == HistSource::Climate && back.d[0].years == 3 &&
+          back.d[0].wetPct == out[0].wetPct);
   }
   std::printf("weather: ошибок %d\n", fails);
   return fails;

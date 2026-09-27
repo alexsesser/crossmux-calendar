@@ -367,7 +367,7 @@ void drawGlyphText(const GfxRenderer& r, int font, Glyph g, int x, int y, const 
 }
 
 int drawRichRows(const GfxRenderer& r, int font, int x, int w, int y, const RichItems& items, EpdFontFamily::Style st,
-                 bool center) {
+                 bool center, bool draw) {
   constexpr int kGap = 14;  // между элементами одной строки
   const int rowH = glyphSize(r, font);
   int rows = 0, from = 0;
@@ -375,7 +375,7 @@ int drawRichRows(const GfxRenderer& r, int font, int x, int w, int y, const Rich
     int total = -kGap;
     for (int i = from; i < to; ++i) total += kGap + glyphTextW(r, font, items.it[i].g, items.it[i].s, st);
     int cx = center ? x + (w - total) / 2 : x;
-    for (int i = from; i < to; ++i) {
+    for (int i = from; i < to && draw; ++i) {
       drawGlyphText(r, font, items.it[i].g, cx, y + rows * rowH, items.it[i].s, st);
       cx += glyphTextW(r, font, items.it[i].g, items.it[i].s, st) + kGap;
     }

@@ -129,7 +129,8 @@ struct RichItems {
 };
 // center — по центру [x, x+w); иначе прижато к x.
 int drawRichRows(const GfxRenderer& r, int font, int x, int w, int y, const RichItems& items,
-                 EpdFontFamily::Style st = kRegular, bool center = true);
+                 EpdFontFamily::Style st = kRegular, bool center = true,
+                 bool draw = true);
 
 // «17°» / «--»; «0,4» (ru/de) или «0.4» (en) миллиметры.
 void fmtDeg(char* out, size_t n, float v);
